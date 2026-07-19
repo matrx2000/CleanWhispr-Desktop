@@ -33,11 +33,11 @@ class HotkeySlot(BaseModel):
 
 
 class HotkeySettings(BaseModel):
-    dictation: HotkeySlot = HotkeySlot(combo="f8")
+    dictation: HotkeySlot = HotkeySlot(combo="ctrl+super")
     # NOT ctrl+alt+<letter>: Ctrl+Alt is AltGr on many European layouts, so such
     # combos TYPE a character into the focused app (Croatian: Ctrl+Alt+E = €),
     # which destroys the very selection the editor is about to use
-    editor: HotkeySlot = HotkeySlot(combo="f9")
+    editor: HotkeySlot = HotkeySlot(combo="alt+super")
 
 
 class SttSettings(BaseModel):

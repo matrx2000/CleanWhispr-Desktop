@@ -149,8 +149,8 @@ Location: `platformdirs` user config dir (`%LOCALAPPDATA%/CleanWispr/config.json
 ```jsonc
 {
   "hotkeys": {
-    "dictation": { "combo": "f8", "mode": "toggle" },           // mode: toggle | hold
-    "editor":    { "combo": "f9", "mode": "toggle" }            // NOT ctrl+alt+<letter>: AltGr clash on EU layouts
+    "dictation": { "combo": "ctrl+super", "mode": "toggle" },   // mode: toggle | hold
+    "editor":    { "combo": "alt+super", "mode": "toggle" }     // NOT ctrl+alt+<letter>: AltGr clash on EU layouts
   },
   "stt": {
     "engine": "whisper",               // whisper | parakeet

@@ -9,7 +9,8 @@ def test_defaults():
     assert s.hotkeys.dictation.mode is ActivationMode.TOGGLE
     assert s.hotkeys.editor.mode is ActivationMode.TOGGLE
     # never ctrl+alt+<letter>: AltGr on European layouts types into the target app
-    assert s.hotkeys.editor.combo == "f9"
+    assert s.hotkeys.dictation.combo == "ctrl+super"
+    assert s.hotkeys.editor.combo == "alt+super"
     assert s.stt.engine == "whisper"
     assert s.stt.language == "auto"
     assert s.llm.provider == "ollama"

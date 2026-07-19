@@ -1,6 +1,6 @@
 # CleanWispr
 
-**Version 0.2.3** · Local voice-to-text and voice-driven text editing for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
+**Version 0.2.4** · Local voice-to-text and voice-driven text editing for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
 
 ## What it does
 
@@ -209,6 +209,24 @@ selected text — never your history.
 
 ## Changelog
 
+### 0.2.4
+
+**Changed**
+
+- **Default hotkeys are now Ctrl+Win (dictation) and Alt+Win (voice
+  editor)**; existing configs keep whatever combos they have
+
+**Fixed**
+
+- **Hotkey settings kept resetting after a restart**: a startup "migration"
+  rewrote any combo matching an old default, silently overwriting hotkeys the
+  user had chosen deliberately — all such migrations removed
+- **Model list not refreshing after a download**: download-completion signals
+  ran their UI updates on the worker thread, so a freshly downloaded model's
+  "Use" button only appeared after an app restart; all background-task
+  signals (model/engine downloads, Ollama pulls, wizard downloads) are now
+  delivered on the UI thread, with regression tests
+
 ### 0.2.3
 
 **New**
@@ -225,9 +243,8 @@ selected text — never your history.
 
 **Changed**
 
-- **Default hotkeys are now F8 (dictation) and F9 (voice editor)** — the old
-  Ctrl+Win dictation default collided with Windows virtual-desktop shortcuts;
-  existing configs still on the old default are migrated automatically
+- **Default hotkeys switched to F8 (dictation) and F9 (voice editor)**
+  (superseded by 0.2.4, which moved to Ctrl+Win / Alt+Win)
 
 ### 0.2.2
 
