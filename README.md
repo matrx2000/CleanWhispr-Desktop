@@ -8,6 +8,16 @@
 
 **✏ Voice editor** — select text anywhere, press the editor hotkey, and speak a command: *"make this formal"*, *"remove the second sentence"*, *"translate this to English"*. A local LLM (via [Ollama](https://ollama.com)) applies the edit and the result replaces your selection. With nothing selected, it writes new text from your command.
 
+## Screenshots
+
+| Model manager (Settings → Transcription) | History browser |
+|---|---|
+| ![Model manager with card-style engine and model rows](docs/images/settings-transcription.png) | ![Searchable history with card list and detail pane](docs/images/settings-history.png) |
+
+| Guided first-run setup | About |
+|---|---|
+| ![Step-by-step setup wizard, engine choice page](docs/images/setup-wizard.png) | ![About tab with credits and licenses](docs/images/settings-about.png) |
+
 ## Feature overview
 
 | Area | Highlights |
