@@ -1,6 +1,6 @@
 # CleanWispr
 
-**Version 0.1.0** · Local voice-to-text and voice-driven text editing for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
+**Version 0.2.0** · Local voice-to-text and voice-driven text editing for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
 
 ## What it does
 
@@ -12,7 +12,7 @@
 
 | Area | Highlights |
 |---|---|
-| **Transcription** | whisper.cpp engine with CPU / **CUDA** / Vulkan builds (Metal on macOS); 6 model sizes (Tiny → Large-v3 + Turbo) downloaded in-app with progress; 60+ languages incl. auto-detect; custom dictionary to bias names/jargon |
+| **Transcription** | Two engines: **whisper.cpp** (CPU / **CUDA** / Vulkan builds, Metal on macOS; 6 model sizes Tiny → Large-v3 + Turbo; 60+ languages; custom dictionary) and **NVIDIA Parakeet** via sherpa-onnx (in-process, extremely fast even on CPU; multilingual v3 with auto language detection). All models downloaded in-app with progress |
 | **Voice editor** | Ollama model auto-discovery with parameter/quantization/context info; install models by pasting `ollama pull …` commands (name-only extraction — nothing is executed); auto-starts Ollama if it isn't running; hardened prompts (selection is data, output-only) |
 | **Live feedback** | Overlay pill narrates every stage: mic warm-up → recording (level-reactive) → transcribing → model loading (with seconds counter) → writing → pasting; **thinking panel** streams reasoning models' thoughts as markdown, with the exact command + selection that was sent; synthesized audio cues (toggleable) |
 | **Hotkeys** | Two global shortcuts (dictation / editor), click-to-capture UI, toggle or push-to-hold per slot, Esc cancels, overlap-conflict validation with clear explanations |
@@ -99,6 +99,39 @@ Everything is stored locally under your user profile
 (`history.db`), logs, downloaded models and engine binaries. Deleting that
 folder is a full factory reset. The AI model receives only your spoken
 command and the selected text — never your history.
+
+## Changelog
+
+### 0.2.0
+
+- **NVIDIA Parakeet engine** (sherpa-onnx, in-process): multilingual 0.6B v3
+  with automatic language detection and a small fast English 110M model —
+  excellent speed even without a GPU; engine selector in Settings
+- **Linux support** (X11/WSLg) and experimental macOS: platform injectors
+  with tool fallback chains, per-platform engine builds (Metal on macOS),
+  XDG / LaunchAgent autostart
+- **GPU transcription**: CUDA and Vulkan whisper-server builds with automatic
+  fallback to CPU
+- **Voice editor upgrades**: live Ollama status in the overlay (model loading
+  with a seconds counter), streaming **thinking panel** with markdown rendering
+  and the exact command + selection sent to the model; install Ollama models by
+  pasting `ollama pull` commands; Ollama auto-start when not running
+- **UI overhaul**: Material Design dark theme (qt-material), logical tab order,
+  plain-language explanations and tooltips everywhere, editable history with an
+  edited-flag and confirmed clear-all, mic level meter, overlay positioning,
+  synthesized sound cues, verbose-logging toggle, open-settings/logs buttons
+- **Robustness**: single-instance lock, orphan-proof child processes (job
+  object / PDEATHSIG), hotkey overlap validation, Bluetooth-mic warm-up
+  handling, empty-recording guards, inference retry, clipboard-history-clean
+  transient writes
+- **Packaging**: PyInstaller Windows bundle + portable zip, Inno Setup
+  installer script, beginner-friendly `main.py` launcher
+
+### 0.1.0
+
+- Initial release: local whisper.cpp dictation with global hotkeys
+  (toggle / push-to-hold), Ollama-powered voice editor on selected text,
+  SQLite history, tray + overlay UI
 
 ## Attribution
 

@@ -42,10 +42,37 @@ class TranscriptionTab(QWidget):
             "leaves this PC. One-time setup: download an engine build below, download "
             "at least one model, then set the language you dictate in."
         ))
+        layout.addWidget(self._engine_choice_group())
         layout.addWidget(self._engine_group())
         layout.addWidget(self._models_group())
+        layout.addWidget(self._parakeet_group())
         layout.addWidget(self._language_group())
         layout.addStretch()
+
+    # --- engine choice (whisper vs parakeet) ---
+
+    def _engine_choice_group(self) -> QGroupBox:
+        group = QGroupBox("Speech recognition engine")
+        row = QHBoxLayout(group)
+        self._engine_combo = QComboBox()
+        self._engine_combo.addItem("Whisper (whisper.cpp — 60+ languages, GPU builds)", "whisper")
+        self._engine_combo.addItem(
+            "NVIDIA Parakeet (sherpa-onnx — very fast, auto language)", "parakeet"
+        )
+        index = self._engine_combo.findData(self._settings.stt.engine)
+        self._engine_combo.setCurrentIndex(max(0, index))
+        self._engine_combo.setToolTip(
+            "Whisper: widest language support, custom dictionary, GPU acceleration. "
+            "Parakeet: NVIDIA's ASR — excellent speed and accuracy even on CPU, "
+            "25 languages with automatic detection, no dictionary support."
+        )
+        self._engine_combo.currentIndexChanged.connect(self._engine_changed)
+        row.addWidget(self._engine_combo, 1)
+        return group
+
+    def _engine_changed(self) -> None:
+        self._settings.stt.engine = self._engine_combo.currentData()
+        self._on_change()
 
     # --- engine binaries (cpu / cuda / vulkan) ---
 
@@ -201,6 +228,75 @@ class TranscriptionTab(QWidget):
         self._on_change()
         for mid in self._model_rows:
             self._refresh_model_row(mid)
+
+    # --- parakeet models ---
+
+    def _parakeet_group(self) -> QGroupBox:
+        group = QGroupBox("NVIDIA Parakeet models")
+        grid = QGridLayout(group)
+        self._parakeet_rows: dict[str, dict] = {}
+        for row_index, model in enumerate(registry.PARAKEET_MODELS.values()):
+            label = QLabel(
+                f"<b>{model.label}</b>"
+                f"<br><span style='color:gray'>{model.description} · {model.size_mb} MB</span>"
+            )
+            grid.addWidget(label, row_index, 0)
+            active = QLabel()
+            grid.addWidget(active, row_index, 1)
+            progress = QProgressBar()
+            progress.setVisible(False)
+            progress.setFixedWidth(140)
+            grid.addWidget(progress, row_index, 2)
+            action = QPushButton()
+            action.clicked.connect(partial(self._parakeet_action, model.id))
+            grid.addWidget(action, row_index, 3)
+            use_button = QPushButton("Use")
+            use_button.clicked.connect(partial(self._select_parakeet, model.id))
+            grid.addWidget(use_button, row_index, 4)
+            self._parakeet_rows[model.id] = {
+                "active": active, "progress": progress, "action": action, "use": use_button,
+            }
+            self._refresh_parakeet_row(model.id)
+        grid.setColumnStretch(0, 1)
+        return group
+
+    def _refresh_parakeet_row(self, model_id: str) -> None:
+        widgets = self._parakeet_rows[model_id]
+        installed = registry.is_parakeet_model_installed(model_id)
+        selected = (
+            self._settings.stt.parakeet_model == model_id
+            and self._settings.stt.engine == "parakeet"
+        )
+        widgets["active"].setText("ACTIVE" if selected and installed else "")
+        widgets["use"].setEnabled(installed and not selected)
+        widgets["action"].setText("Delete" if installed else "Download")
+
+    def _parakeet_action(self, model_id: str) -> None:
+        if registry.is_parakeet_model_installed(model_id):
+            if (
+                self._settings.stt.engine == "parakeet"
+                and self._settings.stt.parakeet_model == model_id
+            ):
+                QMessageBox.information(
+                    self, "Model in use", "Select another model before deleting the active one."
+                )
+                return
+            downloader.delete_parakeet_model(model_id)
+            self._refresh_parakeet_row(model_id)
+            return
+        widgets = self._parakeet_rows[model_id]
+        task = DownloadTask(partial(downloader.download_parakeet_model, model_id))
+        self._wire_task(task, f"parakeet:{model_id}", widgets["progress"], widgets["action"])
+        task.finished.connect(partial(self._refresh_parakeet_row, model_id))
+        task.start()
+
+    def _select_parakeet(self, model_id: str) -> None:
+        self._settings.stt.parakeet_model = model_id
+        self._settings.stt.engine = "parakeet"
+        index = self._engine_combo.findData("parakeet")
+        self._engine_combo.setCurrentIndex(index)  # also saves via _engine_changed
+        for mid in self._parakeet_rows:
+            self._refresh_parakeet_row(mid)
 
     # --- language + dictionary ---
 

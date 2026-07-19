@@ -94,6 +94,10 @@ class Recorder:
                 blocksize=_BLOCK_SIZE,
                 device=device,
                 callback=callback,
+                # deep buffering: we transcribe after the fact, so added input
+                # latency is invisible — but it absorbs system hiccups that
+                # would otherwise drop samples ("input overflow")
+                latency="high",
             )
             self._stream.start()
         except (sd.PortAudioError, ValueError) as exc:

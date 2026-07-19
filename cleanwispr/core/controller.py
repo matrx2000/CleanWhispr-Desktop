@@ -89,14 +89,16 @@ class Controller(QObject):
         settings: Settings,
         db: HistoryDb,
         recorder: Recorder,
-        engine: WhisperCppEngine,
+        engine: WhisperCppEngine | dict,
         injector: TextInjector,
     ) -> None:
         super().__init__()
         self.settings = settings
         self._db = db
         self._recorder = recorder
-        self._engine = engine
+        # engine: a single SttEngine (used for every stt.engine setting) or a
+        # dict of {"whisper": ..., "parakeet": ...}
+        self._engines = engine if isinstance(engine, dict) else {"whisper": engine}
         self._injector = injector
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pipeline")
         self._state = AppState.IDLE
@@ -170,13 +172,21 @@ class Controller(QObject):
             self._set_state(AppState.IDLE)
             self.notice.emit("Recording cancelled")
 
+    def _active_engine(self, settings: Settings):
+        """(engine, model_id) for the configured STT engine, whisper fallback."""
+        stt = settings.stt
+        if stt.engine == "parakeet" and "parakeet" in self._engines:
+            return self._engines["parakeet"], stt.parakeet_model
+        return self._engines["whisper"], stt.whisper_model
+
     def prewarm(self) -> None:
-        """Start the whisper server in the background so first dictation is fast."""
+        """Load the configured STT engine in the background so dictation is fast."""
 
         def warm() -> None:
             try:
                 stt = self.settings.stt
-                self._engine.ensure(stt.whisper_model, stt.language, stt.gpu)
+                engine, model_id = self._active_engine(self.settings)
+                engine.ensure(model_id, stt.language, stt.gpu)
             except SttError as exc:
                 log.info("prewarm skipped: %s", exc)
 
@@ -185,7 +195,8 @@ class Controller(QObject):
     def shutdown(self) -> None:
         self._recorder.abort()
         self._executor.shutdown(wait=False, cancel_futures=True)
-        self._engine.stop()
+        for engine in self._engines.values():
+            engine.stop()
 
     # --- pipeline ---
 
@@ -251,9 +262,10 @@ class Controller(QObject):
         """Shared STT leg; returns the result or None after emitting a failure."""
         stt = settings.stt
         try:
-            self._engine.ensure(stt.whisper_model, stt.language, stt.gpu)
+            engine, model_id = self._active_engine(settings)
+            engine.ensure(model_id, stt.language, stt.gpu)
             prompt = ", ".join(stt.custom_dictionary) or None
-            return self._engine.transcribe(pcm, language=stt.language, initial_prompt=prompt)
+            return engine.transcribe(pcm, language=stt.language, initial_prompt=prompt)
         except SttError as exc:
             self._outcome_ready.emit(_PipelineOutcome(ok=False, message=str(exc)))
             return None
@@ -283,7 +295,7 @@ class Controller(QObject):
             ok=True,
             text=result.text,
             language=result.language,
-            engine=f"whisper:{settings.stt.whisper_model}",
+            engine=f"{settings.stt.engine}:{self._active_engine(settings)[1]}",
             duration_ms=result.duration_ms,
             audio_path=audio_path,
         )
@@ -351,7 +363,7 @@ class Controller(QObject):
             kind=SessionKind.EDIT,
             text=edited,
             language=result.language,
-            engine=f"whisper:{settings.stt.whisper_model}",
+            engine=f"{settings.stt.engine}:{self._active_engine(settings)[1]}",
             llm_model=f"{settings.llm.provider}:{options.model}",
             instruction=instruction,
             source_text=selection,

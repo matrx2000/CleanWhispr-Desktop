@@ -151,6 +151,33 @@ def test_cancel_aborts_recording(qtbot, db):
     c.shutdown()
 
 
+def test_engine_dispatch_by_setting(qtbot, db):
+    class NamedEngine(FakeEngine):
+        def __init__(self, text):
+            super().__init__(text=text)
+            self.ensured = []
+
+        def ensure(self, model_id, language="auto", gpu="auto"):
+            self.ensured.append(model_id)
+
+    whisper = NamedEngine("from whisper")
+    parakeet = NamedEngine("from parakeet")
+    settings = Settings()
+    settings.stt.engine = "parakeet"
+    c = Controller(
+        settings, db, FakeRecorder(), {"whisper": whisper, "parakeet": parakeet}, FakeInjector()
+    )
+    c.toggle_dictation()
+    with qtbot.waitSignal(c.history_changed, timeout=5000):
+        c.toggle_dictation()
+    entry = db.list()[0]
+    assert entry.text == "from parakeet"
+    assert entry.engine == "parakeet:parakeet-tdt-0.6b-v3"
+    assert parakeet.ensured == ["parakeet-tdt-0.6b-v3"]
+    assert whisper.ensured == []
+    c.shutdown()
+
+
 def test_engine_failure_surfaces_error(qtbot, db):
     class BrokenEngine(FakeEngine):
         def ensure(self, model_id, language="auto", gpu="auto"):

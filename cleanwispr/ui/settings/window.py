@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
@@ -118,11 +119,23 @@ class SettingsWindow(QMainWindow):
         verbose_check.toggled.connect(toggle_verbose)
         form.addRow(verbose_check)
 
+        folder_row = QHBoxLayout()
+        settings_button = QPushButton("Open settings folder")
+        settings_button.setToolTip(
+            f"Opens {paths.config_dir()} in your file manager — config.json, "
+            "history.db, logs, and downloaded models live here."
+        )
+        settings_button.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths.config_dir())))
+        )
+        folder_row.addWidget(settings_button)
         logs_button = QPushButton("Open log folder")
         logs_button.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths.data_dir() / "logs")))
         )
-        form.addRow(logs_button)
+        folder_row.addWidget(logs_button)
+        folder_row.addStretch()
+        form.addRow(folder_row)
 
         form.addRow("Version:", QLabel(__version__))
         form.addRow("Config file:", QLabel(str(paths.config_file())))

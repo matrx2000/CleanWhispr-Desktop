@@ -1,7 +1,7 @@
 ; Inno Setup script for CleanWispr (compile with iscc after scripts/build_windows.py)
 
 #define AppName "CleanWispr"
-#define AppVersion "0.1.0"
+#define AppVersion "0.2.0"
 
 [Setup]
 AppId={{8C1F6E7A-4B2D-4E1C-9A3F-CleanWispr01}

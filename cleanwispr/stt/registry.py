@@ -56,6 +56,53 @@ WHISPER_MODELS: dict[str, WhisperModel] = {
 }
 
 
+# --- NVIDIA Parakeet models (sherpa-onnx, k2-fsa GitHub releases) ---
+
+_SHERPA_RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
+
+
+@dataclass(frozen=True, slots=True)
+class ParakeetModel:
+    id: str
+    label: str
+    description: str
+    size_mb: int
+    archive: str  # tar.bz2 asset name; extracts to a directory of the same stem
+
+    @property
+    def download_url(self) -> str:
+        return f"{_SHERPA_RELEASE}/{self.archive}"
+
+    @property
+    def dir_name(self) -> str:
+        return self.archive.removesuffix(".tar.bz2")
+
+
+PARAKEET_MODELS: dict[str, ParakeetModel] = {
+    m.id: m
+    for m in [
+        ParakeetModel(
+            "parakeet-tdt-0.6b-v3", "Parakeet 0.6B v3",
+            "Multilingual (25 languages, auto-detect), NVIDIA's fast ASR", 465,
+            "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+        ),
+        ParakeetModel(
+            "parakeet-110m-en", "Parakeet 110M (English)",
+            "Small and very fast, English only", 103,
+            "sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8.tar.bz2",
+        ),
+    ]
+}
+
+
+def parakeet_model_dir(model_id: str) -> Path:
+    return paths.models_dir("parakeet") / PARAKEET_MODELS[model_id].dir_name
+
+
+def is_parakeet_model_installed(model_id: str) -> bool:
+    return (parakeet_model_dir(model_id) / "tokens.txt").exists()
+
+
 def model_path(model_id: str) -> Path:
     return paths.models_dir("whisper") / WHISPER_MODELS[model_id].file_name
 

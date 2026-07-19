@@ -9,6 +9,7 @@ import logging
 import os
 import stat
 import sys
+import tarfile
 import tempfile
 import zipfile
 from collections.abc import Callable
@@ -78,6 +79,39 @@ def download_model(
 
 def delete_model(model_id: str) -> None:
     registry.model_path(model_id).unlink(missing_ok=True)
+
+
+# --- Parakeet models (tar.bz2 archives) ---
+
+
+def extract_tar_bz2(archive: Path, dest_dir: Path) -> None:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, "r:bz2") as tar:
+        try:
+            tar.extractall(dest_dir, filter="data")  # blocks path traversal
+        except TypeError:  # Python < 3.12 without the filter param
+            tar.extractall(dest_dir)
+
+
+def download_parakeet_model(
+    model_id: str, *, progress: ProgressFn | None = None, cancel: Event | None = None
+) -> Path:
+    model = registry.PARAKEET_MODELS[model_id]
+    target_dir = registry.parakeet_model_dir(model_id)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        archive = Path(tmp_dir) / model.archive
+        log.info("downloading parakeet model %s from %s", model_id, model.download_url)
+        download_file(model.download_url, archive, progress=progress, cancel=cancel)
+        extract_tar_bz2(archive, target_dir.parent)
+    if not registry.is_parakeet_model_installed(model_id):
+        raise DownloadError(f"Archive for {model_id} did not contain the expected files")
+    return target_dir
+
+
+def delete_parakeet_model(model_id: str) -> None:
+    import shutil
+
+    shutil.rmtree(registry.parakeet_model_dir(model_id), ignore_errors=True)
 
 
 # --- whisper-server binary ---

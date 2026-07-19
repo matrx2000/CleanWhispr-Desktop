@@ -41,6 +41,33 @@ def test_pcm_to_wav_rejects_wrong_dtype():
         pcm_to_wav_bytes(np.zeros(10, dtype=np.float32))
 
 
+def test_parakeet_registry():
+    from cleanwispr.stt.registry import PARAKEET_MODELS
+
+    assert "parakeet-tdt-0.6b-v3" in PARAKEET_MODELS
+    model = PARAKEET_MODELS["parakeet-tdt-0.6b-v3"]
+    assert model.download_url.startswith("https://github.com/k2-fsa/sherpa-onnx/")
+    assert model.dir_name == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+
+
+def test_extract_tar_bz2(tmp_path):
+    import tarfile
+
+    from cleanwispr.stt.downloader import extract_tar_bz2
+
+    src = tmp_path / "model-dir"
+    src.mkdir()
+    (src / "tokens.txt").write_text("a\nb\n")
+    (src / "encoder.int8.onnx").write_bytes(b"onnx")
+    archive = tmp_path / "model.tar.bz2"
+    with tarfile.open(archive, "w:bz2") as tar:
+        tar.add(src, arcname="model-dir")
+
+    dest = tmp_path / "out"
+    extract_tar_bz2(archive, dest)
+    assert (dest / "model-dir" / "tokens.txt").read_text() == "a\nb\n"
+
+
 def test_extract_binary_from_zip(tmp_path):
     zip_path = tmp_path / "bundle.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:

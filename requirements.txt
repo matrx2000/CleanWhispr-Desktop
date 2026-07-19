@@ -7,3 +7,4 @@ sounddevice>=0.4.7    # microphone capture (PortAudio, 16 kHz mono PCM)
 numpy>=1.26           # audio buffers, silence gate math
 pynput>=1.7.7         # global hotkeys (key-down/key-up) + paste keystroke
 qt-material>=2.14     # complete Material Design theme for the settings UI
+sherpa-onnx>=1.11     # NVIDIA Parakeet ASR models (in-process ONNX inference)

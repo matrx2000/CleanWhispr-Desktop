@@ -19,6 +19,7 @@ from cleanwispr.hotkeys.pynput_backend import PynputBackend
 from cleanwispr.storage import settings as settings_store
 from cleanwispr.storage.db import HistoryDb
 from cleanwispr.stt import registry
+from cleanwispr.stt.parakeet import ParakeetEngine
 from cleanwispr.stt.whisper_cpp import WhisperCppEngine
 from cleanwispr.ui import theme
 from cleanwispr.ui.overlay import OverlayPill
@@ -85,8 +86,8 @@ def main() -> int:
         autostart.set_autostart(True)  # keep the registry command current
     db = HistoryDb()
 
-    engine = WhisperCppEngine()
-    controller = Controller(settings, db, Recorder(), engine, _make_injector())
+    engines = {"whisper": WhisperCppEngine(), "parakeet": ParakeetEngine()}
+    controller = Controller(settings, db, Recorder(), engines, _make_injector())
 
     def on_settings_changed() -> None:
         settings_store.save(settings)
