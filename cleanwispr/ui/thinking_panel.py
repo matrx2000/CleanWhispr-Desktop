@@ -54,7 +54,7 @@ class ThinkingPanel(QWidget):
         close_button.setCursor(Qt.CursorShape.PointingHandCursor)
         close_button.setStyleSheet(
             "QPushButton { background: transparent; color: #8a8f98; border: none;"
-            " font-size: 12px; }"
+            " padding: 0; font-size: 12px; }"
             "QPushButton:hover { color: white; }"
         )
         close_button.clicked.connect(self.hide)
