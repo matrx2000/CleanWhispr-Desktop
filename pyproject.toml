@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cleanwispr"
+version = "0.1.0"
+description = "Local voice-to-text and voice-driven text editing for Windows and Linux."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.scripts]
+cleanwispr = "cleanwispr.app:main"
+
+[tool.setuptools]
+packages = { find = { include = ["cleanwispr*"] } }
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["openwhispr-main"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+qt_api = "pyside6"

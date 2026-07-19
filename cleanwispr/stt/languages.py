@@ -1,0 +1,82 @@
+"""Transcription languages supported by Whisper (subset mirrors OpenWhispr's list).
+
+Codes are ISO 639-1, passed to whisper-server via --language. "auto" enables
+whisper's built-in language detection.
+"""
+
+LANGUAGES: list[tuple[str, str]] = [
+    ("auto", "Auto-detect"),
+    ("en", "English"),
+    ("hr", "Croatian"),
+    ("af", "Afrikaans"),
+    ("ar", "Arabic"),
+    ("az", "Azerbaijani"),
+    ("be", "Belarusian"),
+    ("bg", "Bulgarian"),
+    ("bn", "Bengali"),
+    ("bs", "Bosnian"),
+    ("ca", "Catalan"),
+    ("cs", "Czech"),
+    ("cy", "Welsh"),
+    ("da", "Danish"),
+    ("de", "German"),
+    ("el", "Greek"),
+    ("es", "Spanish"),
+    ("et", "Estonian"),
+    ("eu", "Basque"),
+    ("fa", "Persian"),
+    ("fi", "Finnish"),
+    ("fr", "French"),
+    ("gl", "Galician"),
+    ("gu", "Gujarati"),
+    ("he", "Hebrew"),
+    ("hi", "Hindi"),
+    ("hu", "Hungarian"),
+    ("hy", "Armenian"),
+    ("id", "Indonesian"),
+    ("is", "Icelandic"),
+    ("it", "Italian"),
+    ("ja", "Japanese"),
+    ("ka", "Georgian"),
+    ("kk", "Kazakh"),
+    ("kn", "Kannada"),
+    ("ko", "Korean"),
+    ("lt", "Lithuanian"),
+    ("lv", "Latvian"),
+    ("mk", "Macedonian"),
+    ("ml", "Malayalam"),
+    ("mr", "Marathi"),
+    ("ms", "Malay"),
+    ("ne", "Nepali"),
+    ("nl", "Dutch"),
+    ("no", "Norwegian"),
+    ("pa", "Punjabi"),
+    ("pl", "Polish"),
+    ("pt", "Portuguese"),
+    ("ro", "Romanian"),
+    ("ru", "Russian"),
+    ("si", "Sinhala"),
+    ("sk", "Slovak"),
+    ("sl", "Slovenian"),
+    ("sq", "Albanian"),
+    ("sr", "Serbian"),
+    ("sv", "Swedish"),
+    ("sw", "Swahili"),
+    ("ta", "Tamil"),
+    ("te", "Telugu"),
+    ("th", "Thai"),
+    ("tl", "Tagalog"),
+    ("tr", "Turkish"),
+    ("uk", "Ukrainian"),
+    ("ur", "Urdu"),
+    ("uz", "Uzbek"),
+    ("vi", "Vietnamese"),
+    ("zh", "Chinese"),
+]
+
+
+def language_label(code: str) -> str:
+    for c, label in LANGUAGES:
+        if c == code:
+            return label
+    return code

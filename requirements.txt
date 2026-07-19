@@ -1,0 +1,9 @@
+# CleanWispr runtime dependencies
+PySide6>=6.8          # UI: tray, overlay, settings window
+pydantic>=2.7         # settings schema validation
+platformdirs>=4.2     # config/cache/data directory resolution
+httpx>=0.27           # localhost HTTP: whisper-server, Ollama API
+sounddevice>=0.4.7    # microphone capture (PortAudio, 16 kHz mono PCM)
+numpy>=1.26           # audio buffers, silence gate math
+pynput>=1.7.7         # global hotkeys (key-down/key-up) + paste keystroke
+qt-material>=2.14     # complete Material Design theme for the settings UI

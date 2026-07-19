@@ -1,0 +1,22 @@
+# reference project (kept on disk, not in git)
+openwhispr-main/
+
+# Claude Code local settings (machine-specific absolute paths)
+.claude/settings.json
+.claude/settings.local.json
+
+# python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# packaging output
+*.spec
