@@ -1,6 +1,6 @@
 # CleanWispr
 
-**Version 0.2.2** · Local voice-to-text and voice-driven text editing for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
+**Version 0.2.3** · Local voice-to-text and voice-driven text editing for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
 
 ## What it does
 
@@ -208,6 +208,26 @@ pre-uninstall cleanup). The AI model receives only your spoken command and the
 selected text — never your history.
 
 ## Changelog
+
+### 0.2.3
+
+**New**
+
+- **Hardware-aware model recommendations in the setup guide**: the voice
+  editor step now detects your accelerator (NVIDIA VRAM via `nvidia-smi`,
+  Apple Silicon unified memory, AMD, or plain CPU/RAM) and recommends a
+  right-sized Gemma model — **Gemma 4** (12B/26B/31B) on strong GPUs, small
+  **Gemma 3** (4B/1B) on modest hardware — with the exact `ollama pull`
+  command, so the model never overwhelms the machine
+- **README viewer**: the About tab gained an **Open README** button that
+  renders this document GitHub-style (headings, tables, images) in its own
+  resizable window
+
+**Changed**
+
+- **Default hotkeys are now F8 (dictation) and F9 (voice editor)** — the old
+  Ctrl+Win dictation default collided with Windows virtual-desktop shortcuts;
+  existing configs still on the old default are migrated automatically
 
 ### 0.2.2
 

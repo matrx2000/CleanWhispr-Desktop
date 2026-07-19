@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cleanwispr.llm import factory
+from cleanwispr.llm import factory, hardware
 from cleanwispr.storage.settings import Settings
 from cleanwispr.stt import downloader, registry
 from cleanwispr.stt.languages import LANGUAGES
@@ -173,6 +173,7 @@ class SetupWizard(QDialog):
             self._update_engine_state()
         if index == 3:
             self._check_ollama()
+            self._detect_hardware()
         if index == 4:
             self._refresh_done_text()
 
@@ -392,11 +393,23 @@ class SetupWizard(QDialog):
             "It needs <b>Ollama</b>, a free app that runs AI models locally:"
             "<ol>"
             "<li>Install Ollama from the website below.</li>"
-            "<li>After this guide, open Settings → Voice Editor and paste "
-            "<code>ollama pull qwen3:8b</code> to fetch a good editing model.</li>"
+            "<li>After this guide, open Settings → Voice Editor and paste the "
+            "recommended command shown below.</li>"
             "</ol>"
             "This step is optional — dictation works without it."
         ))
+
+        self._hw_label = QLabel("Checking your hardware for a model recommendation…")
+        self._hw_label.setWordWrap(True)
+        self._hw_label.setTextFormat(Qt.TextFormat.RichText)
+        self._hw_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self._hw_label.setStyleSheet(
+            f"background: {theme.SURFACE_2}; border: 1px solid {theme.BORDER}; "
+            "border-radius: 8px; padding: 10px;"
+        )
+        layout.addWidget(self._hw_label)
 
         row = QHBoxLayout()
         website = QPushButton("Open ollama.com")
@@ -415,6 +428,38 @@ class SetupWizard(QDialog):
         layout.addWidget(self._ollama_status)
         layout.addStretch()
         return page
+
+    def _detect_hardware(self) -> None:
+        if getattr(self, "_hw_done", False):
+            return
+        self._hw_done = True
+
+        task = AsyncTask(hardware.detect)
+        self._tasks.append(task)
+
+        def done(result: object) -> None:
+            self._tasks.remove(task)
+            if not isinstance(result, hardware.Hardware):
+                result = hardware.Hardware("cpu", "unknown hardware", None, None)
+            model, reason = hardware.recommended_ollama_model(result)
+            self._hw_label.setText(
+                f"<b>Detected:</b> {result.name}<br>"
+                f"<b>Recommended model:</b> <code>{model}</code> — {reason}.<br>"
+                f"Paste this in Settings → Voice Editor after installing Ollama:"
+                f"<br><code>ollama pull {model}</code>"
+            )
+
+        def failed(_message: str) -> None:
+            self._tasks.remove(task)
+            self._hw_label.setText(
+                "Couldn't inspect your hardware — <code>gemma3:4b</code> is a "
+                "safe starting model on most machines:<br>"
+                "<code>ollama pull gemma3:4b</code>"
+            )
+
+        task.done.connect(done)
+        task.failed.connect(failed)
+        task.start()
 
     def _check_ollama(self) -> None:
         self._ollama_status.setText("Checking for Ollama…")

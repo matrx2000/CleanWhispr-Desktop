@@ -7,6 +7,7 @@ Every tab scrolls, and the window shrinks down to small laptop screens.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QTabWidget,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -61,6 +63,35 @@ _CREDITS: list[tuple[str, str, str]] = [
 ]
 
 
+class _ReadmeWindow(QMainWindow):
+    """The project README rendered as rich text (GitHub-style) in its own
+    resizable/maximizable window."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle(f"{APP_NAME} — README")
+        self.setMinimumSize(420, 320)
+        self.resize(860, 680)
+
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.document().setDocumentMargin(18)
+        readme = Path(__file__).resolve().parents[3] / "README.md"
+        if readme.exists():
+            # base URL makes relative links/images (docs/images/…) resolve
+            browser.document().setBaseUrl(
+                QUrl.fromLocalFile(str(readme.parent) + "/")
+            )
+            browser.setMarkdown(readme.read_text(encoding="utf-8"))
+        else:
+            browser.setPlainText(
+                "README.md was not found next to the app (it is not bundled "
+                "into packaged builds). You can read it in the project "
+                "repository instead."
+            )
+        self.setCentralWidget(browser)
+
+
 def _scrollable(widget: QWidget) -> QScrollArea:
     """Wrap a tab so it stays usable on small screens instead of clipping."""
     scroll = QScrollArea()
@@ -86,6 +117,7 @@ class SettingsWindow(QMainWindow):
         self.resize(780, 560)
         self._on_clear_app_data = on_clear_app_data
         self._on_run_setup = on_run_setup
+        self._readme_window: _ReadmeWindow | None = None
 
         # ordered by how a new user sets things up: engine → editor → triggers → mic
         tabs = QTabWidget()
@@ -270,8 +302,34 @@ class SettingsWindow(QMainWindow):
         note.setStyleSheet(f"color: {theme.MUTED};")
         note.setWordWrap(True)
         layout.addWidget(note)
+
+        layout.addSpacing(14)
+        docs_title = QLabel("README.md")
+        docs_title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        layout.addWidget(docs_title)
+        docs_hint = QLabel(
+            "The full project documentation — features, setup, building, "
+            "changelog — rendered like on GitHub."
+        )
+        docs_hint.setStyleSheet(f"color: {theme.MUTED};")
+        docs_hint.setWordWrap(True)
+        layout.addWidget(docs_hint)
+        readme_row = QHBoxLayout()
+        readme_button = QPushButton("Open README")
+        readme_button.clicked.connect(self._open_readme)
+        readme_row.addWidget(readme_button)
+        readme_row.addStretch()
+        layout.addLayout(readme_row)
+
         layout.addStretch()
         return widget
+
+    def _open_readme(self) -> None:
+        if self._readme_window is None:
+            self._readme_window = _ReadmeWindow()
+        self._readme_window.show()
+        self._readme_window.raise_()
+        self._readme_window.activateWindow()
 
     def closeEvent(self, event) -> None:  # Qt override, keeps Qt naming
         # closing the window hides it; the app lives in the tray

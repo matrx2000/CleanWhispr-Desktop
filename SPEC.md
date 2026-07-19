@@ -149,7 +149,7 @@ Location: `platformdirs` user config dir (`%LOCALAPPDATA%/CleanWispr/config.json
 ```jsonc
 {
   "hotkeys": {
-    "dictation": { "combo": "ctrl+super", "mode": "toggle" },   // mode: toggle | hold
+    "dictation": { "combo": "f8", "mode": "toggle" },           // mode: toggle | hold
     "editor":    { "combo": "f9", "mode": "toggle" }            // NOT ctrl+alt+<letter>: AltGr clash on EU layouts
   },
   "stt": {

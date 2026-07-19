@@ -83,6 +83,10 @@ def main() -> int:
         # migrate away from the old default: AltGr+E types € on e.g. Croatian
         # layouts, clobbering the selection the editor needs
         settings.hotkeys.editor.combo = "f9"
+    if settings.hotkeys.dictation.combo == "ctrl+super":
+        # old default → F8, pairing with the editor's F9 (Ctrl+Win collides
+        # with Windows 10/11 virtual-desktop shortcuts)
+        settings.hotkeys.dictation.combo = "f8"
     settings_store.save(settings)  # materialize defaults on first run
     paths.set_models_override(settings.stt.models_dir or None)
     registry.migrate_legacy_binaries()

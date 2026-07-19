@@ -1,5 +1,5 @@
 """CleanWispr — local voice-to-text and voice-driven text editing."""
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 APP_NAME = "CleanWispr"
