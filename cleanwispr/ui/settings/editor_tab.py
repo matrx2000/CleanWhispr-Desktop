@@ -7,7 +7,6 @@ from collections.abc import Callable
 from functools import partial
 
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -27,7 +26,7 @@ from cleanwispr.llm.base import LlmModelInfo
 from cleanwispr.llm.ollama import OllamaProvider, parse_pull_command
 from cleanwispr.storage.settings import Settings
 from cleanwispr.ui.tasks import AsyncTask, DownloadTask
-from cleanwispr.ui.widgets import intro_label
+from cleanwispr.ui.widgets import LabeledToggle, intro_label
 
 
 class EditorTab(QWidget):
@@ -165,7 +164,9 @@ class EditorTab(QWidget):
         row.addWidget(self._pull_button)
         layout.addLayout(row)
 
-        self._run_as_pull_check = QCheckBox("Treat pasted 'ollama run …' commands as downloads")
+        self._run_as_pull_check = LabeledToggle(
+            "Treat pasted 'ollama run …' commands as downloads"
+        )
         self._run_as_pull_check.setChecked(self._settings.llm.ollama.interpret_run_as_pull)
         self._run_as_pull_check.toggled.connect(self._run_as_pull_changed)
         layout.addWidget(self._run_as_pull_check)
@@ -285,22 +286,52 @@ class EditorTab(QWidget):
         self._temp_spin.valueChanged.connect(self._params_changed)
         form.addRow("Temperature:", self._temp_spin)
 
-        self._keep_edit = QLineEdit(ollama.keep_alive)
-        self._keep_edit.setPlaceholderText("e.g. 10m, 1h, -1 (forever)")
-        self._keep_edit.setToolTip(
+        keep_tip = (
             "How long Ollama keeps the model in (V)RAM after an edit. Longer = the "
-            "next edit starts instantly; '-1' keeps it loaded forever. After it "
+            "next edit starts instantly; 'Forever' never unloads it. After it "
             "unloads, the next edit pays a few seconds of loading time."
         )
-        self._keep_edit.editingFinished.connect(self._params_changed)
-        form.addRow("Keep model loaded:", self._keep_edit)
+        self._keep_value = QSpinBox()
+        self._keep_value.setRange(1, 999)
+        self._keep_value.setToolTip(keep_tip)
+        self._keep_unit = QComboBox()
+        for label, suffix in [
+            ("Seconds", "s"),
+            ("Minutes", "m"),
+            ("Hours", "h"),
+            ("Forever (never unload)", "-1"),
+        ]:
+            self._keep_unit.addItem(label, suffix)
+        self._keep_unit.setToolTip(keep_tip)
+        value, unit = self._parse_keep_alive(ollama.keep_alive)
+        self._keep_value.setValue(value)
+        self._keep_unit.setCurrentIndex(max(0, self._keep_unit.findData(unit)))
+        self._keep_value.setEnabled(unit != "-1")
+        self._keep_value.valueChanged.connect(self._params_changed)
+        self._keep_unit.currentIndexChanged.connect(self._params_changed)
+        keep_row = QHBoxLayout()
+        keep_row.addWidget(self._keep_value)
+        keep_row.addWidget(self._keep_unit, 1)
+        form.addRow("Keep model loaded:", keep_row)
         return group
+
+    @staticmethod
+    def _parse_keep_alive(text: str) -> tuple[int, str]:
+        """'10m' → (10, 'm'); '-1' → forever; anything unparseable → the default."""
+        text = text.strip()
+        if text == "-1":
+            return 10, "-1"
+        if len(text) > 1 and text[:-1].isdigit() and text[-1] in "smh":
+            return int(text[:-1]), text[-1]
+        return 10, "m"
 
     def _params_changed(self) -> None:
         ollama = self._settings.llm.ollama
         ollama.num_ctx = self._ctx_spin.value()
         ollama.temperature = round(self._temp_spin.value(), 2)
-        ollama.keep_alive = self._keep_edit.text().strip() or "10m"
+        unit = self._keep_unit.currentData()
+        self._keep_value.setEnabled(unit != "-1")
+        ollama.keep_alive = "-1" if unit == "-1" else f"{self._keep_value.value()}{unit}"
         self._on_change()
 
     # --- helpers ---

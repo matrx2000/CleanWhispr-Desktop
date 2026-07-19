@@ -3,32 +3,115 @@ instruction/original for edits, metadata, copy/delete)."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QGuiApplication
+from collections.abc import Callable
+
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from cleanwispr.storage.db import HistoryDb, HistoryEntry
-from cleanwispr.ui.widgets import intro_label
+from cleanwispr.storage.settings import Settings
+from cleanwispr.ui import theme
+from cleanwispr.ui.widgets import ACCENT_SOFT, LabeledToggle, intro_label
 
-_PREVIEW_LEN = 80
+_PREVIEW_LEN = 160  # characters; wraps over two lines inside the card
+
+_CARD_QSS = f"""
+QFrame#historyCard {{
+    background: {theme.SURFACE_2};
+    border: 1px solid {theme.BORDER};
+    border-radius: 8px;
+}}
+QFrame#historyCard:hover {{ border-color: {theme.MUTED}; }}
+QFrame#historyCard[selected="true"] {{
+    border: 1px solid {theme.ACCENT};
+    background: rgba(124, 102, 220, 0.10);
+}}
+QLabel {{ background: transparent; border: none; }}
+QLabel#cardKindDictation {{
+    font-size: 9px; font-weight: 700; color: #3dd68c;
+    background: rgba(48, 164, 108, 0.16); border-radius: 8px; padding: 2px 8px;
+}}
+QLabel#cardKindEdit {{
+    font-size: 9px; font-weight: 700; color: {ACCENT_SOFT};
+    background: rgba(124, 102, 220, 0.18); border-radius: 8px; padding: 2px 8px;
+}}
+QLabel#cardEdited {{
+    font-size: 9px; font-weight: 700; color: #f0b429;
+    background: rgba(240, 180, 41, 0.12); border-radius: 8px; padding: 2px 8px;
+}}
+QLabel#cardTime {{ font-size: 10px; color: {theme.MUTED}; }}
+QLabel#cardPreview {{ font-size: 12px; color: {theme.TEXT}; }}
+"""
+
+
+class _HistoryCard(QFrame):
+    """One history entry in the list: kind badge + timestamp on top,
+    a wrapped two-line text preview below."""
+
+    HEIGHT = 68
+
+    def __init__(self, entry: HistoryEntry) -> None:
+        super().__init__()
+        self.setObjectName("historyCard")
+        self.setStyleSheet(_CARD_QSS)
+        self.setFixedHeight(self.HEIGHT)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(4)
+
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        is_edit = entry.kind == "edit"
+        kind = QLabel("EDIT" if is_edit else "DICTATION")
+        kind.setObjectName("cardKindEdit" if is_edit else "cardKindDictation")
+        top.addWidget(kind)
+        self.edited_badge = QLabel("EDITED")
+        self.edited_badge.setObjectName("cardEdited")
+        self.edited_badge.setVisible(entry.edited_at is not None)
+        top.addWidget(self.edited_badge)
+        time_label = QLabel(entry.created_at)
+        time_label.setObjectName("cardTime")
+        top.addWidget(time_label)
+        top.addStretch()
+        layout.addLayout(top)
+
+        preview = " ".join(entry.text.split())  # collapse newlines/runs of spaces
+        if len(preview) > _PREVIEW_LEN:
+            preview = preview[:_PREVIEW_LEN] + "…"
+        preview_label = QLabel(preview or "(empty)")
+        preview_label.setObjectName("cardPreview")
+        preview_label.setWordWrap(True)
+        preview_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(preview_label, 1)
+
+    def set_selected(self, selected: bool) -> None:
+        self.setProperty("selected", "true" if selected else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
 
 
 class HistoryTab(QWidget):
-    def __init__(self, db: HistoryDb) -> None:
+    def __init__(self, settings: Settings, db: HistoryDb, on_change: Callable[[], None]) -> None:
         super().__init__()
+        self._settings = settings
         self._db = db
+        self._on_change = on_change
         self._entries: list[HistoryEntry] = []
         self._current: HistoryEntry | None = None
 
@@ -38,6 +121,15 @@ class HistoryTab(QWidget):
             "nothing is uploaded, and the AI model never reads this history. Select "
             "an entry to read or change its text; manual changes are marked as edited."
         ))
+        self._enabled_toggle = LabeledToggle("Save dictations and edits to history")
+        self._enabled_toggle.setToolTip(
+            "Off: nothing new is written to history after it's pasted. Existing "
+            "entries are kept until you delete them."
+        )
+        self._enabled_toggle.setChecked(settings.history.enabled)
+        self._enabled_toggle.toggled.connect(self._enabled_changed)
+        layout.addWidget(self._enabled_toggle)
+
         search_row = QHBoxLayout()
         self._search = QLineEdit()
         self._search.setPlaceholderText("Search history…")
@@ -55,20 +147,21 @@ class HistoryTab(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # left: entry list
-        self._table = QTableWidget(0, 3)
-        self._table.setHorizontalHeaderLabels(["Time", "Kind", "Text"])
-        self._table.horizontalHeader().setStretchLastSection(True)
-        self._table.verticalHeader().setVisible(False)
-        self._table.setColumnWidth(0, 130)
-        self._table.setColumnWidth(1, 74)
-        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self._table.setAlternatingRowColors(True)
-        self._table.setShowGrid(False)
-        self._table.itemSelectionChanged.connect(self._selection_changed)
-        splitter.addWidget(self._table)
+        # left: entry list (card per entry)
+        self._list = QListWidget()
+        self._list.setFrameShape(QFrame.Shape.NoFrame)
+        self._list.setSpacing(3)
+        self._list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list.setMinimumWidth(240)
+        self._list.setStyleSheet(
+            "QListWidget { background: transparent; }"
+            "QListWidget::item { border: none; background: transparent; }"
+            "QListWidget::item:selected { background: transparent; }"
+        )
+        self._cards: list[_HistoryCard] = []
+        self._list.currentRowChanged.connect(self._selection_changed)
+        splitter.addWidget(self._list)
 
         # right: detail pane
         detail = QWidget()
@@ -122,23 +215,24 @@ class HistoryTab(QWidget):
         super().showEvent(event)
         self.refresh()
 
+    def _enabled_changed(self, checked: bool) -> None:
+        self._settings.history.enabled = checked
+        self._on_change()
+
     def refresh(self) -> None:
         selected_id = self._current.id if self._current else None
         self._entries = self._db.list(limit=500, search=self._search.text() or None)
-        self._table.setRowCount(len(self._entries))
+        self._list.blockSignals(True)
+        self._list.clear()
+        self._cards = []
         restore_row = -1
         for row, entry in enumerate(self._entries):
-            preview = entry.text.replace("\n", " ")
-            if len(preview) > _PREVIEW_LEN:
-                preview = preview[:_PREVIEW_LEN] + "…"
-            time_text = f"{entry.created_at} (edited)" if entry.edited_at else entry.created_at
-            self._table.setItem(row, 0, QTableWidgetItem(time_text))
-            kind_item = QTableWidgetItem("edit" if entry.kind == "edit" else "dictate")
-            kind_item.setForeground(
-                QColor("#b3a7f0") if entry.kind == "edit" else QColor("#30a46c")
-            )
-            self._table.setItem(row, 1, kind_item)
-            self._table.setItem(row, 2, QTableWidgetItem(preview))
+            card = _HistoryCard(entry)
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, _HistoryCard.HEIGHT + 2))
+            self._list.addItem(item)
+            self._list.setItemWidget(item, card)
+            self._cards.append(card)
             if entry.id == selected_id:
                 restore_row = row
         total = self._db.count()
@@ -147,16 +241,20 @@ class HistoryTab(QWidget):
             f"{shown} of {total}" if shown != total else f"{total} entries"
         )
         if restore_row >= 0:
-            self._table.selectRow(restore_row)
-            # selectRow is a no-op signal-wise if the row was already selected —
-            # always refresh the detail pane from the re-read entry
+            self._list.setCurrentRow(restore_row)
+            self._cards[restore_row].set_selected(True)
+            self._list.blockSignals(False)
+            # setCurrentRow was muted — always refresh the detail pane from the
+            # re-read entry
             self._show_entry(self._entries[restore_row])
         else:
+            self._list.blockSignals(False)
             self._show_entry(None)
 
-    def _selection_changed(self) -> None:
-        rows = {index.row() for index in self._table.selectedIndexes()}
-        entry = self._entries[next(iter(rows))] if rows else None
+    def _selection_changed(self, row: int) -> None:
+        for index, card in enumerate(self._cards):
+            card.set_selected(index == row)
+        entry = self._entries[row] if 0 <= row < len(self._entries) else None
         self._show_entry(entry)
 
     def _show_entry(self, entry: HistoryEntry | None) -> None:

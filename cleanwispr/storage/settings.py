@@ -47,6 +47,7 @@ class SttSettings(BaseModel):
     language: str = "auto"
     custom_dictionary: list[str] = Field(default_factory=list)
     gpu: str = "auto"  # auto | cuda | vulkan | cpu
+    models_dir: str = ""  # custom model download folder; empty = default cache dir
 
 
 class OllamaSettings(BaseModel):
@@ -72,6 +73,10 @@ class InjectSettings(BaseModel):
     restore_clipboard: bool = True
 
 
+class HistorySettings(BaseModel):
+    enabled: bool = True  # off: dictations/edits are never written to history.db
+
+
 class UiSettings(BaseModel):
     overlay_position: str = "bottom-right"
     start_on_login: bool = False
@@ -86,6 +91,7 @@ class Settings(BaseModel):
     llm: LlmSettings = LlmSettings()
     audio: AudioSettings = AudioSettings()
     inject: InjectSettings = InjectSettings()
+    history: HistorySettings = HistorySettings()
     ui: UiSettings = UiSettings()
 
 

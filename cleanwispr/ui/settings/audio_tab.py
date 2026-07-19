@@ -7,7 +7,6 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -20,7 +19,7 @@ from PySide6.QtWidgets import (
 from cleanwispr.audio.capture import AudioError, Recorder, list_input_devices
 from cleanwispr.storage import paths
 from cleanwispr.storage.settings import Settings
-from cleanwispr.ui.widgets import intro_label
+from cleanwispr.ui.widgets import LabeledToggle, PathLink, intro_label
 
 
 class _LevelBridge(QObject):
@@ -73,7 +72,7 @@ class AudioTab(QWidget):
         self._meter_hint.setVisible(False)
         layout.addWidget(self._meter_hint)
 
-        self._keep_check = QCheckBox("Keep audio recordings (saved as WAV files)")
+        self._keep_check = LabeledToggle("Keep audio recordings (saved as WAV files)")
         self._keep_check.setToolTip(
             "Off (default): audio is transcribed in memory and immediately discarded. "
             "On: every recording is also saved as a WAV file in the folder below."
@@ -86,7 +85,7 @@ class AudioTab(QWidget):
         purge_button = QPushButton("Delete all saved recordings")
         purge_button.clicked.connect(self._purge_recordings)
         purge_row.addWidget(purge_button)
-        self._purge_hint = QLabel(f"Folder: {paths.recordings_dir()}")
+        self._purge_hint = PathLink(paths.recordings_dir(), prefix="Folder: ")
         self._purge_hint.setStyleSheet("color: gray;")
         purge_row.addWidget(self._purge_hint, 1)
         layout.addLayout(purge_row)

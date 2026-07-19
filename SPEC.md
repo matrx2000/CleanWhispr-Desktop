@@ -17,7 +17,7 @@ A lightweight, fully local voice-to-text and voice-driven text-editing desktop a
 - Cloud transcription or cloud LLM providers, auth, accounts, usage quotas, referral/upgrade UI.
 - Notes system, meeting detection/transcription, speaker diarization, calendar integration, semantic/vector search, chat agent overlay.
 - Automatic "AI cleanup" of dictated text. Dictation output is the **raw transcript**. (LLM editing happens only when explicitly triggered via the editor hotkey.)
-- macOS support (architecture should not preclude it, but no work is spent on it).
+- macOS as a first-class target (experimental support exists — injector, Metal engine build, `scripts/build_macos.py` — but it is untested and gets no dedicated effort).
 - JavaScript/Electron anything.
 
 ## 3. The Two Core Features
@@ -139,6 +139,7 @@ CREATE TABLE transcriptions (
 ```
 
 - **Audio retention is OFF by default** — recordings are held in memory and discarded after transcription. Settings expose an opt-in toggle (+ retention folder and a purge button).
+- **History logging can be disabled entirely** (`history.enabled`, default on): text is still transcribed/edited and pasted, it just is never written to `history.db`.
 - History window: reverse-chronological list, full-text filter, copy/delete entries, view dictation vs edit detail.
 
 ### Settings (JSON, pydantic-validated)
@@ -149,7 +150,7 @@ Location: `platformdirs` user config dir (`%LOCALAPPDATA%/CleanWispr/config.json
 {
   "hotkeys": {
     "dictation": { "combo": "ctrl+super", "mode": "toggle" },   // mode: toggle | hold
-    "editor":    { "combo": "ctrl+alt+e", "mode": "toggle" }
+    "editor":    { "combo": "f9", "mode": "toggle" }            // NOT ctrl+alt+<letter>: AltGr clash on EU layouts
   },
   "stt": {
     "engine": "whisper",               // whisper | parakeet
@@ -157,15 +158,17 @@ Location: `platformdirs` user config dir (`%LOCALAPPDATA%/CleanWispr/config.json
     "parakeet_model": "parakeet-tdt-0.6b-v3",
     "language": "auto",
     "custom_dictionary": [],
-    "gpu": "auto"                      // auto | cuda | vulkan | cpu
+    "gpu": "auto",                     // auto | cuda | vulkan | cpu
+    "models_dir": ""                   // custom model download folder; empty = default cache dir
   },
   "llm": {
     "provider": "ollama",
-    "ollama": { "base_url": "http://127.0.0.1:11434", "model": "", "num_ctx": 8192, "temperature": 0.2, "keep_alive": "10m" }
+    "ollama": { "base_url": "http://127.0.0.1:11434", "model": "", "num_ctx": 8192, "temperature": 0.2, "keep_alive": "10m", "interpret_run_as_pull": true }
   },
   "audio": { "input_device": null, "keep_recordings": false },
   "inject": { "restore_clipboard": true },
-  "ui": { "overlay_position": "bottom-right", "start_on_login": false, "ui_language": "en" }
+  "history": { "enabled": true },      // off: nothing is written to history.db
+  "ui": { "overlay_position": "bottom-right", "start_on_login": false, "ui_language": "en", "sounds_enabled": true, "verbose_logging": false }
 }
 ```
 
@@ -173,14 +176,24 @@ No secrets are stored (no API keys exist in a local-only app), so no keyring/enc
 
 ## 6. Settings UI (PySide6 window)
 
-Tabs:
+Tabs (ordered by how a new user sets things up; the window is resizable down to
+small laptop screens and every tab scrolls):
 
-1. **Hotkeys** — key-capture widget per slot (dictation, editor), activation mode selector per slot, conflict validation between slots.
-2. **Transcription** — engine picker; model picker with download/delete + size/language info + download progress; language dropdown; custom dictionary editor; GPU backend selector with detected-hardware hint.
-3. **Editor (LLM)** — provider selector (Ollama; extensible); **auto-detected list of installed Ollama models** with parameter size/quantization/context info from `/api/show`; context window (`num_ctx`), temperature, keep-alive; base URL; "Test connection" button; prompt preview/override (advanced).
-4. **Audio** — input device picker with live level meter; audio retention toggle + folder + purge.
-5. **History** — the browser from §5.
-6. **General** — overlay position, start-on-login, UI language, About/licenses (incl. OpenWhispr MIT attribution).
+1. **Transcription** — engine picker (whisper/parakeet); card-style model manager (download/delete/use, ACTIVE badge, inline progress); engine-build manager (CPU/CUDA/Vulkan) with GPU backend selector; **model storage location** picker (any folder/disk, default = user cache dir); language dropdown; custom dictionary editor.
+2. **Voice Editor (LLM)** — provider selector (Ollama; extensible); **auto-detected list of installed Ollama models** with parameter size/quantization/context info from `/api/show`; context window (`num_ctx`), temperature, keep-alive; base URL; "Test connection" button; prompt preview/override (advanced).
+3. **Hotkeys** — key-capture widget per slot (dictation, editor), activation mode selector per slot, conflict validation between slots.
+4. **Microphone** — input device picker with live level meter; audio retention toggle + folder (clickable path) + purge.
+5. **History** — history-logging on/off toggle + the browser from §5.
+6. **General** — sounds toggle, start-on-login, overlay position, verbose logging, open settings/log folder, clickable data paths, **Clear app data** (confirmed full factory reset: settings, history, logs, models, binaries — then quit).
+7. **About** — version, author, and every third-party project with verified links and licenses (incl. OpenWhispr MIT attribution).
+
+Folder paths shown anywhere in Settings are clickable links that open the
+folder in the system file manager after a confirmation prompt.
+
+**First-run setup wizard**: when the app starts with no existing config, a
+step-by-step guide (welcome → engine choice + download → language → optional
+Ollama setup → hotkey recap) gets a non-technical user to a working install.
+Skippable at any point; re-runnable from Settings → General.
 
 ## 7. Tray & Overlay
 
@@ -195,7 +208,7 @@ Tabs:
 | Paste | `SendInput` Ctrl+V (via pynput/pywin32); detect terminal window class/exe → Ctrl+Shift+V | `xdotool` → `wtype` → `ydotool` fallback chain (port of `clipboard.js` order); both CLIPBOARD and PRIMARY set |
 | Clipboard | Qt clipboard | Qt clipboard + `wl-copy`/`xclip` fallback |
 | Tray | native | StatusNotifier (Qt handles); document AppIndicator extension for GNOME |
-| Packaging | PyInstaller one-dir + Inno Setup/NSIS installer | PyInstaller + AppImage (deb/rpm later) |
+| Packaging | PyInstaller one-dir (windowed) + portable zip + Inno Setup installer (`scripts/build_windows.py`) | PyInstaller one-dir + portable tar.gz + sample .desktop (`scripts/build_linux.py`); AppImage/deb/rpm later. macOS: PyInstaller .app + ditto zip (`scripts/build_macos.py`, experimental). Models/engine binaries are never bundled — always downloaded at runtime |
 | Autostart | Run registry key / Startup shortcut | XDG autostart .desktop |
 
 ## 9. Performance Requirements
@@ -216,7 +229,7 @@ Tabs:
 
 ## 11. Repository & Agentic Development Setup
 
-- **Tooling**: `uv` for env/deps, `ruff` (lint + format), `pytest` (+ `pytest-qt`), `pyright` basic type checking. Python ≥ 3.11.
+- **Tooling**: plain `venv` + `requirements.txt` / `requirements-dev.txt` / `requirements-build.txt` for env/deps (no uv/poetry/pdm), `ruff` (lint + format), `pytest` (+ `pytest-qt`). Python ≥ 3.11.
 - **`CLAUDE.md`** at repo root: architecture map, module responsibilities, interface contracts (`SttEngine`, `LlmProvider`, `HotkeyBackend`, `TextInjector`), how to run/test, platform gotchas (ported wisdom from OpenWhispr's CLAUDE.md), and pointers into `openwhispr-main/` as reference material.
 - **Conventions**: every subsystem behind its `base.py` interface; UI never imports engines directly (goes through `core.controller`); all user-facing strings via a light i18n layer from day one; no blocking calls on the Qt main thread.
 - **Tests**: unit tests for gate, registry, config schema, prompt building, injection command selection; integration tests with a mocked Ollama/whisper-server; manual test checklist per platform in `docs/TESTING.md`.

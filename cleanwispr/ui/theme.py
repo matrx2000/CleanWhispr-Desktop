@@ -75,13 +75,6 @@ QComboBox QAbstractItemView::item {{
 QComboBox QAbstractItemView::item:hover {{ background: {BG}; }}
 QComboBox QAbstractItemView::item:selected {{ background: {ACCENT}; color: white; }}
 
-QCheckBox {{ background: transparent; spacing: 8px; }}
-QCheckBox::indicator {{
-    width: 16px; height: 16px; border: 1px solid {BORDER}; border-radius: 4px;
-    background: {SURFACE_2};
-}}
-QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
-
 QProgressBar {{
     background: {SURFACE_2}; border: none; border-radius: 5px; height: 10px;
     text-align: center;
@@ -122,8 +115,19 @@ QToolTip {{ background: {SURFACE_2}; color: {TEXT}; border: 1px solid {BORDER}; 
 
 # app-specific tweaks layered over qt-material
 _MATERIAL_EXTRA_QSS = f"""
-QPushButton#danger {{ color: {DANGER}; border-color: {DANGER}; }}
-QPushButton#danger:hover {{ background: rgba(229, 72, 77, 0.15); }}
+/* replace qt-material's pink squared buttons with the app's rounded look */
+QPushButton {{
+    background: {SURFACE_2}; color: {TEXT}; border: 1px solid {BORDER};
+    border-radius: 6px; padding: 5px 16px; font-weight: 600;
+}}
+QPushButton:hover {{
+    border-color: {ACCENT}; background: rgba(124, 102, 220, 0.10); color: {TEXT};
+}}
+QPushButton:pressed {{ background: {BG}; }}
+QPushButton:disabled {{ color: {MUTED}; background: {SURFACE}; border-color: {BORDER}; }}
+QPushButton:focus {{ border-color: {ACCENT}; }}
+QPushButton#danger {{ color: {DANGER}; border-color: rgba(229, 72, 77, 0.5); }}
+QPushButton#danger:hover {{ background: rgba(229, 72, 77, 0.15); border-color: {DANGER}; }}
 QGroupBox {{ font-size: 12px; }}
 QTableWidget {{ alternate-background-color: {SURFACE_2}; }}
 QToolTip {{

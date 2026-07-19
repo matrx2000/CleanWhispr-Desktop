@@ -15,6 +15,7 @@ def test_defaults():
     assert s.llm.provider == "ollama"
     assert s.llm.ollama.base_url == "http://127.0.0.1:11434"
     assert s.audio.keep_recordings is False  # audio retention off by default
+    assert s.history.enabled is True  # history logging on by default
 
 
 def test_roundtrip(tmp_path):

@@ -62,9 +62,9 @@ def db(tmp_path):
     db.close()
 
 
-def make_controller(db, recorder=None, engine=None, injector=None):
+def make_controller(db, recorder=None, engine=None, injector=None, settings=None):
     return Controller(
-        Settings(),
+        settings or Settings(),
         db,
         recorder or FakeRecorder(),
         engine or FakeEngine(),
@@ -88,6 +88,21 @@ def test_full_dictation_pipeline(qtbot, db):
     assert len(entries) == 1
     assert entries[0].text == "hello world"
     assert entries[0].kind == "dictation"
+    c.shutdown()
+
+
+def test_dictation_skips_history_when_disabled(qtbot, db):
+    settings = Settings()
+    settings.history.enabled = False
+    injector = FakeInjector()
+    c = make_controller(db, injector=injector, settings=settings)
+
+    c.toggle_dictation()
+    c.toggle_dictation()
+    qtbot.waitUntil(lambda: c.state is AppState.IDLE, timeout=5000)
+
+    assert injector.injected == ["hello world"]  # injection still happens
+    assert db.list() == []  # nothing persisted
     c.shutdown()
 
 

@@ -440,18 +440,19 @@ class Controller(QObject):
         """Main thread: persist history, settle state."""
         if outcome.ok:
             self._set_state(AppState.INJECTING)
-            self._db.add(
-                outcome.kind.value,
-                outcome.text,
-                instruction=outcome.instruction,
-                source_text=outcome.source_text,
-                language=outcome.language,
-                engine=outcome.engine,
-                llm_model=outcome.llm_model,
-                duration_ms=outcome.duration_ms,
-                audio_path=outcome.audio_path,
-            )
-            self.history_changed.emit()
+            if self.settings.history.enabled:
+                self._db.add(
+                    outcome.kind.value,
+                    outcome.text,
+                    instruction=outcome.instruction,
+                    source_text=outcome.source_text,
+                    language=outcome.language,
+                    engine=outcome.engine,
+                    llm_model=outcome.llm_model,
+                    duration_ms=outcome.duration_ms,
+                    audio_path=outcome.audio_path,
+                )
+                self.history_changed.emit()
             if outcome.message:
                 self.notice.emit(outcome.message)
             self._set_state(AppState.IDLE)

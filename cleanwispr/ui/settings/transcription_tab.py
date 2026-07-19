@@ -1,5 +1,5 @@
 """Transcription settings: engine binary + model manager (download from the app,
-like OpenWhispr's model picker), language, custom dictionary."""
+like OpenWhispr's model picker), storage location, language, custom dictionary."""
 
 from __future__ import annotations
 
@@ -10,23 +10,27 @@ from typing import ClassVar
 
 from PySide6.QtWidgets import (
     QComboBox,
-    QGridLayout,
+    QFileDialog,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPlainTextEdit,
-    QProgressBar,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
+from cleanwispr.storage import paths
 from cleanwispr.storage.settings import Settings
 from cleanwispr.stt import downloader, registry
 from cleanwispr.stt.languages import LANGUAGES
+from cleanwispr.ui import theme
 from cleanwispr.ui.tasks import DownloadTask
-from cleanwispr.ui.widgets import intro_label
+from cleanwispr.ui.widgets import ModelRow, intro_label
 
 
 class TranscriptionTab(QWidget):
@@ -36,18 +40,28 @@ class TranscriptionTab(QWidget):
         self._on_change = on_change
         self._tasks: dict[str, DownloadTask] = {}  # keep refs while running
 
-        layout = QVBoxLayout(self)
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.addWidget(intro_label(
-            "Your speech is transcribed 100% locally by whisper.cpp — audio never "
-            "leaves this PC. One-time setup: download an engine build below, download "
-            "at least one model, then set the language you dictate in."
+            "Your speech is transcribed 100% locally — audio never leaves this PC. "
+            "One-time setup: download an engine build below, download at least one "
+            "model, then set the language you dictate in."
         ))
         layout.addWidget(self._engine_choice_group())
         layout.addWidget(self._engine_group())
         layout.addWidget(self._models_group())
         layout.addWidget(self._parakeet_group())
+        layout.addWidget(self._storage_group())
         layout.addWidget(self._language_group())
         layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(content)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
 
     # --- engine choice (whisper vs parakeet) ---
 
@@ -73,6 +87,16 @@ class TranscriptionTab(QWidget):
     def _engine_changed(self) -> None:
         self._settings.stt.engine = self._engine_combo.currentData()
         self._on_change()
+        self._refresh_all_model_rows()
+        self._update_language_notice()
+
+    def _refresh_all_model_rows(self) -> None:
+        """The ACTIVE badge depends on both the selected model and the selected
+        engine, so any engine change must repaint every model row."""
+        for model_id in self._model_rows:
+            self._refresh_model_row(model_id)
+        for model_id in self._parakeet_rows:
+            self._refresh_parakeet_row(model_id)
 
     # --- engine binaries (cpu / cuda / vulkan) ---
 
@@ -87,6 +111,7 @@ class TranscriptionTab(QWidget):
     def _engine_group(self) -> QGroupBox:
         group = QGroupBox("Transcription engine (whisper.cpp server)")
         layout = QVBoxLayout(group)
+        layout.setSpacing(6)
 
         gpu_row = QHBoxLayout()
         gpu_row.addWidget(QLabel("Acceleration:"))
@@ -108,41 +133,23 @@ class TranscriptionTab(QWidget):
         gpu_row.addWidget(self._gpu_combo, 1)
         layout.addLayout(gpu_row)
 
-        grid = QGridLayout()
-        self._engine_rows: dict[str, dict] = {}
-        for row_index, variant in enumerate(registry.server_variants()):
+        self._engine_rows: dict[str, ModelRow] = {}
+        for variant in registry.server_variants():
             name, description = self._VARIANT_LABELS[variant]
-            grid.addWidget(
-                QLabel(f"<b>{name}</b> <span style='color:gray'>({description})</span>"),
-                row_index, 0,
-            )
-            status = QLabel()
-            grid.addWidget(status, row_index, 1)
-            progress = QProgressBar()
-            progress.setVisible(False)
-            progress.setFixedWidth(140)
-            grid.addWidget(progress, row_index, 2)
-            button = QPushButton()
-            button.clicked.connect(partial(self._download_engine, variant))
-            grid.addWidget(button, row_index, 3)
-            self._engine_rows[variant] = {
-                "status": status, "progress": progress, "button": button,
-            }
+            row = ModelRow(name, description, usable=False)
+            row.download_clicked.connect(partial(self._download_engine, variant))
+            layout.addWidget(row)
+            self._engine_rows[variant] = row
             self._refresh_engine_row(variant)
-        grid.setColumnStretch(1, 1)
-        layout.addLayout(grid)
         return group
 
     def _refresh_engine_row(self, variant: str) -> None:
-        widgets = self._engine_rows[variant]
-        installed = registry.is_server_installed(variant)
-        widgets["status"].setText("Installed" if installed else "not installed")
-        widgets["button"].setText("Reinstall" if installed else "Download")
+        self._engine_rows[variant].set_state(registry.is_server_installed(variant))
 
     def _download_engine(self, variant: str) -> None:
-        widgets = self._engine_rows[variant]
+        row = self._engine_rows[variant]
         task = DownloadTask(partial(downloader.download_server_binary, variant))
-        self._wire_task(task, f"engine:{variant}", widgets["progress"], widgets["button"])
+        self._wire_task(task, f"engine:{variant}", row)
         task.finished.connect(partial(self._refresh_engine_row, variant))
         task.start()
 
@@ -150,7 +157,7 @@ class TranscriptionTab(QWidget):
         self._settings.stt.gpu = self._gpu_combo.currentData()
         self._on_change()
 
-    # --- models ---
+    # --- whisper models ---
 
     def _models_group(self) -> QGroupBox:
         group = QGroupBox("Whisper models")
@@ -158,64 +165,44 @@ class TranscriptionTab(QWidget):
             "Bigger models are more accurate but slower. With a GPU, Turbo or Large "
             "give the best quality; on CPU, Base or Small keep things responsive."
         )
-        grid = QGridLayout(group)
-        self._model_rows: dict[str, dict] = {}
-        for row_index, model in enumerate(registry.WHISPER_MODELS.values()):
-            recommended = (
-                " <span style='color:#b3a7f0'>(recommended)</span>" if model.recommended else ""
+        layout = QVBoxLayout(group)
+        layout.setSpacing(6)
+        self._model_rows: dict[str, ModelRow] = {}
+        for model in registry.WHISPER_MODELS.values():
+            row = ModelRow(
+                model.label,
+                f"{model.description} · {model.size_mb} MB",
+                tag="Recommended" if model.recommended else None,
             )
-            label = QLabel(
-                f"<b>{model.label}</b>{recommended}"
-                + f"<br><span style='color:gray'>{model.description} · {model.size_mb} MB</span>"
-            )
-            grid.addWidget(label, row_index, 0)
-
-            active = QLabel()
-            grid.addWidget(active, row_index, 1)
-
-            progress = QProgressBar()
-            progress.setVisible(False)
-            progress.setFixedWidth(140)
-            grid.addWidget(progress, row_index, 2)
-
-            action = QPushButton()
-            action.clicked.connect(partial(self._model_action, model.id))
-            grid.addWidget(action, row_index, 3)
-
-            use_button = QPushButton("Use")
-            use_button.clicked.connect(partial(self._select_model, model.id))
-            grid.addWidget(use_button, row_index, 4)
-
-            self._model_rows[model.id] = {
-                "active": active, "progress": progress, "action": action, "use": use_button,
-            }
+            row.download_clicked.connect(partial(self._download_model, model.id))
+            row.delete_clicked.connect(partial(self._delete_model, model.id))
+            row.use_clicked.connect(partial(self._select_model, model.id))
+            layout.addWidget(row)
+            self._model_rows[model.id] = row
             self._refresh_model_row(model.id)
         return group
 
     def _refresh_model_row(self, model_id: str) -> None:
-        widgets = self._model_rows[model_id]
         installed = registry.is_model_installed(model_id)
-        selected = self._settings.stt.whisper_model == model_id
-        widgets["active"].setText("ACTIVE" if selected and installed else "")
-        widgets["use"].setEnabled(installed and not selected)
-        # single stable connection; the label tells _model_action what to do
-        widgets["action"].setText("Delete" if installed else "Download")
-
-    def _model_action(self, model_id: str) -> None:
-        if registry.is_model_installed(model_id):
-            self._delete_model(model_id)
-        else:
-            self._download_model(model_id)
+        active = (
+            installed
+            and self._settings.stt.engine == "whisper"
+            and self._settings.stt.whisper_model == model_id
+        )
+        self._model_rows[model_id].set_state(installed, active)
 
     def _download_model(self, model_id: str) -> None:
-        widgets = self._model_rows[model_id]
+        row = self._model_rows[model_id]
         task = DownloadTask(partial(downloader.download_model, model_id))
-        self._wire_task(task, f"model:{model_id}", widgets["progress"], widgets["action"])
+        self._wire_task(task, f"model:{model_id}", row)
         task.finished.connect(partial(self._refresh_model_row, model_id))
         task.start()
 
     def _delete_model(self, model_id: str) -> None:
-        if self._settings.stt.whisper_model == model_id:
+        if (
+            self._settings.stt.engine == "whisper"
+            and self._settings.stt.whisper_model == model_id
+        ):
             QMessageBox.information(
                 self, "Model in use", "Select another model before deleting the active one."
             )
@@ -225,84 +212,128 @@ class TranscriptionTab(QWidget):
 
     def _select_model(self, model_id: str) -> None:
         self._settings.stt.whisper_model = model_id
-        self._on_change()
-        for mid in self._model_rows:
-            self._refresh_model_row(mid)
+        self._switch_engine("whisper")
+
+    def _switch_engine(self, engine: str) -> None:
+        """Using a model also activates its engine; route through the combo so
+        the change is saved and every row repaints exactly once."""
+        self._settings.stt.engine = engine
+        index = self._engine_combo.findData(engine)
+        if self._engine_combo.currentIndex() != index:
+            self._engine_combo.setCurrentIndex(index)  # triggers _engine_changed
+        else:
+            self._on_change()
+            self._refresh_all_model_rows()
 
     # --- parakeet models ---
 
     def _parakeet_group(self) -> QGroupBox:
         group = QGroupBox("NVIDIA Parakeet models")
-        grid = QGridLayout(group)
-        self._parakeet_rows: dict[str, dict] = {}
-        for row_index, model in enumerate(registry.PARAKEET_MODELS.values()):
-            label = QLabel(
-                f"<b>{model.label}</b>"
-                f"<br><span style='color:gray'>{model.description} · {model.size_mb} MB</span>"
-            )
-            grid.addWidget(label, row_index, 0)
-            active = QLabel()
-            grid.addWidget(active, row_index, 1)
-            progress = QProgressBar()
-            progress.setVisible(False)
-            progress.setFixedWidth(140)
-            grid.addWidget(progress, row_index, 2)
-            action = QPushButton()
-            action.clicked.connect(partial(self._parakeet_action, model.id))
-            grid.addWidget(action, row_index, 3)
-            use_button = QPushButton("Use")
-            use_button.clicked.connect(partial(self._select_parakeet, model.id))
-            grid.addWidget(use_button, row_index, 4)
-            self._parakeet_rows[model.id] = {
-                "active": active, "progress": progress, "action": action, "use": use_button,
-            }
+        layout = QVBoxLayout(group)
+        layout.setSpacing(6)
+        self._parakeet_rows: dict[str, ModelRow] = {}
+        for model in registry.PARAKEET_MODELS.values():
+            row = ModelRow(model.label, f"{model.description} · {model.size_mb} MB")
+            row.download_clicked.connect(partial(self._download_parakeet, model.id))
+            row.delete_clicked.connect(partial(self._delete_parakeet, model.id))
+            row.use_clicked.connect(partial(self._select_parakeet, model.id))
+            layout.addWidget(row)
+            self._parakeet_rows[model.id] = row
             self._refresh_parakeet_row(model.id)
-        grid.setColumnStretch(0, 1)
         return group
 
     def _refresh_parakeet_row(self, model_id: str) -> None:
-        widgets = self._parakeet_rows[model_id]
         installed = registry.is_parakeet_model_installed(model_id)
-        selected = (
-            self._settings.stt.parakeet_model == model_id
+        active = (
+            installed
             and self._settings.stt.engine == "parakeet"
+            and self._settings.stt.parakeet_model == model_id
         )
-        widgets["active"].setText("ACTIVE" if selected and installed else "")
-        widgets["use"].setEnabled(installed and not selected)
-        widgets["action"].setText("Delete" if installed else "Download")
+        self._parakeet_rows[model_id].set_state(installed, active)
 
-    def _parakeet_action(self, model_id: str) -> None:
-        if registry.is_parakeet_model_installed(model_id):
-            if (
-                self._settings.stt.engine == "parakeet"
-                and self._settings.stt.parakeet_model == model_id
-            ):
-                QMessageBox.information(
-                    self, "Model in use", "Select another model before deleting the active one."
-                )
-                return
-            downloader.delete_parakeet_model(model_id)
-            self._refresh_parakeet_row(model_id)
-            return
-        widgets = self._parakeet_rows[model_id]
+    def _download_parakeet(self, model_id: str) -> None:
+        row = self._parakeet_rows[model_id]
         task = DownloadTask(partial(downloader.download_parakeet_model, model_id))
-        self._wire_task(task, f"parakeet:{model_id}", widgets["progress"], widgets["action"])
+        self._wire_task(task, f"parakeet:{model_id}", row)
         task.finished.connect(partial(self._refresh_parakeet_row, model_id))
         task.start()
 
+    def _delete_parakeet(self, model_id: str) -> None:
+        if (
+            self._settings.stt.engine == "parakeet"
+            and self._settings.stt.parakeet_model == model_id
+        ):
+            QMessageBox.information(
+                self, "Model in use", "Select another model before deleting the active one."
+            )
+            return
+        downloader.delete_parakeet_model(model_id)
+        self._refresh_parakeet_row(model_id)
+
     def _select_parakeet(self, model_id: str) -> None:
         self._settings.stt.parakeet_model = model_id
-        self._settings.stt.engine = "parakeet"
-        index = self._engine_combo.findData("parakeet")
-        self._engine_combo.setCurrentIndex(index)  # also saves via _engine_changed
-        for mid in self._parakeet_rows:
-            self._refresh_parakeet_row(mid)
+        self._switch_engine("parakeet")
+
+    # --- model storage location ---
+
+    def _storage_group(self) -> QGroupBox:
+        group = QGroupBox("Model storage location")
+        layout = QVBoxLayout(group)
+
+        row = QHBoxLayout()
+        self._models_dir_edit = QLineEdit(str(paths.models_root()))
+        self._models_dir_edit.setReadOnly(True)
+        row.addWidget(self._models_dir_edit, 1)
+        browse = QPushButton("Change…")
+        browse.clicked.connect(self._browse_models_dir)
+        row.addWidget(browse)
+        reset = QPushButton("Reset to default")
+        reset.clicked.connect(partial(self._set_models_dir, ""))
+        row.addWidget(reset)
+        layout.addLayout(row)
+
+        hint = QLabel(
+            "Models download into this folder — point it at another disk if you're "
+            "short on space. Existing downloads are not moved automatically: move "
+            "the 'whisper' and 'parakeet' subfolders there yourself, or re-download."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {theme.MUTED};")
+        layout.addWidget(hint)
+        return group
+
+    def _browse_models_dir(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose model storage folder", str(paths.models_root())
+        )
+        if chosen:
+            self._set_models_dir(chosen)
+
+    def _set_models_dir(self, value: str) -> None:
+        self._settings.stt.models_dir = value
+        paths.set_models_override(value or None)
+        self._models_dir_edit.setText(str(paths.models_root()))
+        self._on_change()
+        self._refresh_all_model_rows()  # installed states depend on the folder
 
     # --- language + dictionary ---
 
     def _language_group(self) -> QGroupBox:
         group = QGroupBox("Language and custom dictionary")
         layout = QVBoxLayout(group)
+
+        language_hint = QLabel(
+            "<b>Whisper</b> transcribes in the language you pick here — or figures "
+            "it out per recording on <i>Auto-detect</i>. Picking a fixed language "
+            "makes recognition faster and more accurate if you always dictate in "
+            "one language.<br>"
+            "<b>NVIDIA Parakeet</b> ignores this dropdown: the 0.6B v3 model "
+            "always auto-detects among its 25 languages, and the 110M model is "
+            "English-only."
+        )
+        language_hint.setWordWrap(True)
+        language_hint.setStyleSheet(f"color: {theme.MUTED}; font-size: 11px;")
+        layout.addWidget(language_hint)
 
         self._language_combo = QComboBox()
         for code, label in LANGUAGES:
@@ -312,12 +343,39 @@ class TranscriptionTab(QWidget):
         self._language_combo.currentIndexChanged.connect(self._language_changed)
         layout.addWidget(self._language_combo)
 
+        layout.addSpacing(6)
         layout.addWidget(QLabel("Words/names to bias recognition (one per line):"))
+        dictionary_hint = QLabel(
+            "<b>Whisper only:</b> these words are shown to the model as context "
+            "before each recording, so unusual names, brands, and jargon come out "
+            "spelled right (e.g. your company or product names). "
+            "<b>Parakeet</b> does not support a custom dictionary and skips this "
+            "list."
+        )
+        dictionary_hint.setWordWrap(True)
+        dictionary_hint.setStyleSheet(f"color: {theme.MUTED}; font-size: 11px;")
+        layout.addWidget(dictionary_hint)
         self._dictionary_edit = QPlainTextEdit("\n".join(self._settings.stt.custom_dictionary))
         self._dictionary_edit.setFixedHeight(70)
         self._dictionary_edit.textChanged.connect(self._dictionary_changed)
         layout.addWidget(self._dictionary_edit)
+
+        # live notice when the current engine won't use these settings
+        self._parakeet_notice = QLabel(
+            "Parakeet is currently your active engine — it auto-detects the "
+            "language and ignores the dictionary. These settings apply when you "
+            "switch back to Whisper."
+        )
+        self._parakeet_notice.setWordWrap(True)
+        self._parakeet_notice.setStyleSheet(
+            "color: #f0b429; font-size: 11px; padding-top: 4px;"
+        )
+        layout.addWidget(self._parakeet_notice)
+        self._update_language_notice()
         return group
+
+    def _update_language_notice(self) -> None:
+        self._parakeet_notice.setVisible(self._settings.stt.engine == "parakeet")
 
     def _language_changed(self) -> None:
         self._settings.stt.language = self._language_combo.currentData()
@@ -330,28 +388,18 @@ class TranscriptionTab(QWidget):
 
     # --- shared task wiring ---
 
-    def _wire_task(
-        self, task: DownloadTask, key: str, progress: QProgressBar, button: QPushButton
-    ) -> None:
+    def _wire_task(self, task: DownloadTask, key: str, row: ModelRow) -> None:
         self._tasks[key] = task
-        button.setEnabled(False)
-        progress.setVisible(True)
-        progress.setRange(0, 0)  # indeterminate until we know the total
-
-        def on_progress(received: int, total: object) -> None:
-            if isinstance(total, int) and total > 0:
-                progress.setRange(0, 100)
-                progress.setValue(int(received * 100 / total))
+        row.set_busy(True)
 
         def cleanup() -> None:
             self._tasks.pop(key, None)
-            progress.setVisible(False)
-            button.setEnabled(True)
+            row.set_busy(False)
 
         def on_failed(msg: str) -> None:
             cleanup()
             QMessageBox.warning(self, "Download failed", msg)
 
-        task.progress.connect(on_progress)
+        task.progress.connect(row.set_progress)
         task.finished.connect(cleanup)
         task.failed.connect(on_failed)

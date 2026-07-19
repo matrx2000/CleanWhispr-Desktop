@@ -13,6 +13,16 @@ from cleanwispr import APP_NAME
 
 _dirs = platformdirs.PlatformDirs(APP_NAME, appauthor=False)
 
+# user-chosen models folder (settings.stt.models_dir); None = default cache location
+_models_override: Path | None = None
+
+
+def set_models_override(path: str | Path | None) -> None:
+    """Route model downloads to a custom folder (e.g. another disk). Called at
+    startup and whenever the user changes the location in settings."""
+    global _models_override
+    _models_override = Path(path) if path else None
+
 
 def config_dir() -> Path:
     path = Path(_dirs.user_config_dir)
@@ -32,9 +42,16 @@ def cache_dir() -> Path:
     return path
 
 
+def models_root() -> Path:
+    """Folder that holds all downloaded models (per-engine subfolders)."""
+    root = _models_override if _models_override else cache_dir() / "models"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def models_dir(engine: str) -> Path:
     """Model storage per STT engine, e.g. models/whisper, models/parakeet."""
-    path = cache_dir() / "models" / engine
+    path = models_root() / engine
     path.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -16,6 +17,7 @@ from cleanwispr.core.controller import Controller
 from cleanwispr.hotkeys.base import HotkeyError
 from cleanwispr.hotkeys.combos import combos_overlap
 from cleanwispr.hotkeys.pynput_backend import PynputBackend
+from cleanwispr.storage import paths
 from cleanwispr.storage import settings as settings_store
 from cleanwispr.storage.db import HistoryDb
 from cleanwispr.stt import registry
@@ -54,6 +56,7 @@ def _make_injector():
 
 
 def main() -> int:
+    first_run = not paths.config_file().exists()  # before load() materializes it
     early_settings = settings_store.load()
     logging_setup.setup(verbose=early_settings.ui.verbose_logging)
 
@@ -81,6 +84,7 @@ def main() -> int:
         # layouts, clobbering the selection the editor needs
         settings.hotkeys.editor.combo = "f9"
     settings_store.save(settings)  # materialize defaults on first run
+    paths.set_models_override(settings.stt.models_dir or None)
     registry.migrate_legacy_binaries()
     if settings.ui.start_on_login:
         autostart.set_autostart(True)  # keep the registry command current
@@ -132,7 +136,53 @@ def main() -> int:
             log.error("hotkey setup failed: %s", exc)
             tray.notify(f"Hotkeys unavailable: {exc}")
 
-    settings_window = SettingsWindow(settings, db, on_settings_changed, apply_hotkeys)
+    cleaned_up = False
+
+    def cleanup() -> None:
+        """Stop everything exactly once — normal quit and clear-app-data share it."""
+        nonlocal cleaned_up
+        if cleaned_up:
+            return
+        cleaned_up = True
+        hotkeys.stop()
+        controller.shutdown()
+        db.close()
+
+    def clear_app_data() -> None:
+        """Factory reset: stop all subsystems (releases file locks on the DB and
+        engine binaries), delete every app folder, then quit."""
+        log.info("clearing all app data at user request")
+        cleanup()
+        roots = {paths.config_dir(), paths.data_dir(), paths.cache_dir(), paths.models_root()}
+        for root in roots:
+            shutil.rmtree(root, ignore_errors=True)
+        app.quit()
+
+    wizard_ref: list = []  # keeps the non-modal-exec dialog alive
+
+    def open_setup_guide() -> None:
+        from cleanwispr.ui.setup_wizard import SetupWizard
+
+        wizard = SetupWizard(settings, on_settings_changed)
+        wizard_ref.append(wizard)
+
+        def finished(_result: int) -> None:
+            wizard_ref.clear()
+            controller.prewarm()  # a model may have just been downloaded
+
+        wizard.finished.connect(finished)
+        wizard.show()
+        wizard.raise_()
+        wizard.activateWindow()
+
+    settings_window = SettingsWindow(
+        settings,
+        db,
+        on_settings_changed,
+        apply_hotkeys,
+        on_clear_app_data=clear_app_data,
+        on_run_setup=open_setup_guide,
+    )
     controller.history_changed.connect(settings_window.history_tab.refresh)
     tray.set_open_settings(_show(settings_window))
 
@@ -151,11 +201,11 @@ def main() -> int:
         tray.notify(f"Global hotkeys unavailable: {exc} — use the tray menu instead.")
 
     controller.prewarm()  # load the whisper model in the background
+    if first_run:
+        open_setup_guide()
 
     exit_code = app.exec()
-    hotkeys.stop()
-    controller.shutdown()
-    db.close()
+    cleanup()
     return exit_code
 
 

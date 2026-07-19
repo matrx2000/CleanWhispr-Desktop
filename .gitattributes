@@ -1,0 +1,5 @@
+# Shell launchers must keep LF endings — CRLF breaks the shebang line on Linux/macOS
+*.sh text eol=lf
+*.command text eol=lf
+# Windows batch files want CRLF
+*.bat text eol=crlf

@@ -1,6 +1,6 @@
 # CleanWispr
 
-**Version 0.2.0** · Local voice-to-text and voice-driven text editing for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
+**Version 0.2.2** · Local voice-to-text and voice-driven text editing for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
 
 ## What it does
 
@@ -20,64 +20,158 @@
 | **Robustness** | Single-instance lock; inference servers die with the app (job object / PDEATHSIG) — no orphan processes; automatic engine fallback (CUDA → CPU); empty-mic and dead-mic guards with actionable messages |
 | **UI** | Material Design dark theme; every setting explained in plain language with tooltips; rotating file log with an opt-in verbose mode |
 
-## Running from source (Windows)
+## Quick start (no Python knowledge needed)
 
-1. Install [Python 3.11+](https://www.python.org/downloads/) — tick **"Add python.exe to PATH"** in the installer.
-2. Open PowerShell in this folder and run, one line at a time:
+The launcher scripts do everything automatically: on first run they create a
+private Python environment, install all dependencies, and start the app;
+afterwards they just start it. The only prerequisite is
+[Python 3.11+](https://www.python.org/downloads/) itself.
+
+| OS | Do this |
+|---|---|
+| **Windows** | Install Python (**tick "Add python.exe to PATH"**), then double-click **`start_windows.bat`** |
+| **Linux** | `sudo apt install python3-venv libportaudio2 xdotool xclip` (Wayland: + `wl-clipboard wtype`), then run **`./start_linux.sh`** |
+| **macOS** | `brew install portaudio`, then double-click **`start_macos.command`** (first time: right-click → Open) |
+
+The app appears as a microphone icon in the system tray, and on first start a
+**guided setup** walks you through downloading a transcription engine + model
+(~220 MB for the recommended Base model), picking your language, and optionally
+setting up [Ollama](https://ollama.com) for the voice editor (paste
+`ollama pull qwen3:8b` into Settings → Voice Editor to fetch an editing model).
+On Windows you can then enable **Settings → General → Start CleanWispr when
+Windows starts** and forget about the script entirely.
+
+Platform notes: on Linux, global hotkeys need X11 (or XWayland) — on pure
+Wayland desktops use the tray menu until native shortcuts land. On macOS
+(experimental, untested), grant **Accessibility** and **Input Monitoring**
+permissions when prompted — required for pasting and global hotkeys.
+
+<details>
+<summary><b>Manual setup</b> (if you prefer doing it yourself)</summary>
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
+# Windows (PowerShell)
+python -m venv venv
+venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python main.py
 ```
-
-The app appears as a microphone icon in the system tray. First-time setup lives
-in Settings → Transcription (download the engine and a model, ~220 MB for the
-recommended Base model). For the voice editor, install [Ollama](https://ollama.com)
-and pull a model (e.g. paste `ollama pull qwen3:8b` into Settings → Voice Editor).
-
-Afterwards, starting the app is just:
-
-```powershell
-.venv\Scripts\Activate.ps1
-python main.py
-```
-
-…or enable **Settings → General → Start CleanWispr when Windows starts**.
-
-## Running on Linux (experimental — X11/WSLg recommended)
 
 ```bash
-sudo apt install python3-venv portaudio19-dev xdotool xclip   # Wayland: + wl-clipboard wtype
-python3 -m venv .venv
-source .venv/bin/activate
+# Linux / macOS
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 python main.py
 ```
 
-Notes: global hotkeys need X11 (or XWayland); on pure Wayland desktops use the
-tray menu until native shortcuts land. GPU transcription uses the CUDA or
-Vulkan engine build (Settings → Transcription).
+</details>
 
-## Running on macOS (experimental, untested)
+## Building standalone executables
 
-Same as Linux (`brew install portaudio`), then grant **Accessibility** and
-**Input Monitoring** permissions to your terminal/Python when prompted —
-required for pasting and global hotkeys. The single engine build includes
-Metal GPU acceleration.
+CleanWispr ships as a [PyInstaller](https://pyinstaller.org) **onedir** bundle:
+a folder containing the executable plus its libraries (deliberately *not* a
+single-file exe — onedir starts faster and triggers far fewer antivirus false
+positives). The build is windowed, so no console window appears.
 
-## Building the Windows app
+Two rules apply to every platform:
 
-```powershell
-pip install -r requirements-build.txt
-python scripts/build_windows.py
-```
+1. **Build on the target OS.** PyInstaller cannot cross-compile — the Windows
+   exe must be built on Windows, the Linux binary on Linux, the macOS app on
+   macOS.
+2. **Models and engine binaries are NOT bundled** — see
+   [What's inside the bundle](#whats-inside-the-bundle-and-what-isnt) below.
+
+Like the start scripts, there is a **one-click build script per OS** in
+`scripts/` — each creates the Python environment with the build tooling if
+needed, then builds. No manual setup required.
+
+### Windows
+
+Double-click **`scripts\build_windows.bat`** (or run
+`python scripts/build_windows.py` from an activated venv with
+`requirements-build.txt` installed).
 
 Produces `dist/CleanWispr/CleanWispr.exe` and `dist/CleanWispr-portable-win64.zip`
 (standalone — no Python required on the target machine). If
 [Inno Setup](https://jrsoftware.org/isinfo.php) (`iscc`) is on PATH, a
 `CleanWispr-setup-win64.exe` installer is compiled as well.
+
+### Linux
+
+Install the system dependencies first (same as running from source), then run
+the build script:
+
+```bash
+sudo apt install python3-venv portaudio19-dev xdotool xclip   # Wayland: + wl-clipboard wtype
+./scripts/build_linux.sh
+```
+
+Produces `dist/CleanWispr/CleanWispr` and
+`dist/CleanWispr-portable-linux-x64.tar.gz`. The bundle includes a sample
+`CleanWispr.desktop` launcher — copy it to `~/.local/share/applications/` and
+set its `Exec=` line to the full path of the extracted binary.
+
+Compatibility note: the binary links against the glibc of the **build**
+machine, so build on the oldest distro you want to support (e.g. build on
+Ubuntu 22.04 to also cover 24.04, not the other way around).
+
+### macOS
+
+```bash
+brew install portaudio
+```
+
+…then double-click **`scripts/build_macos.command`** (first time:
+right-click → Open).
+
+Produces `dist/CleanWispr.app` and `dist/CleanWispr-macos.zip` (zipped with
+`ditto` so the bundle structure survives). The app is built for the CPU of the
+build machine (Apple Silicon or Intel). Because it is unsigned, first launch
+requires right-click → **Open** (or `xattr -dr com.apple.quarantine
+CleanWispr.app`), then grant **Microphone**, **Accessibility**, and **Input
+Monitoring** permissions when prompted.
+
+### What's inside the bundle (and what isn't)
+
+The bundle contains Python, Qt, and the app code — including the sherpa-onnx
+runtime used by the Parakeet engine. Everything else is downloaded **at
+runtime** into the user's data folders, exactly like when running from source:
+
+- whisper.cpp engine builds (CPU / **CUDA** / Vulkan) — downloaded from
+  Settings → Transcription and spawned as a separate process. GPU support is
+  unaffected by PyInstaller: the CUDA build ships its own runtime DLLs.
+- Whisper and Parakeet **models** — downloaded in-app to the model storage
+  folder (configurable in Settings → Transcription).
+- **Ollama** — a separate application the user installs themselves.
+
+This keeps the bundle small and means packaging never breaks GPU or model
+downloads. The one packaged native dependency is sherpa-onnx; if Parakeet ever
+fails *only* in a bundled build, add `--collect-all sherpa_onnx` to the
+PyInstaller arguments in the build script.
+
+### Antivirus false positives (Windows)
+
+PyInstaller executables are sometimes flagged by antivirus software as
+malware. This is a well-known **false positive**: PyInstaller's bootloader
+(the stub that unpacks and starts Python) is also used by actual malware, so
+heuristic scanners distrust anything built with it. If it happens:
+
+- **Prefer the onedir build** (what `build_windows.py` already produces) —
+  single-file `--onefile` exes self-extract at startup, which looks far more
+  suspicious to scanners.
+- **Don't compress with UPX** — the build scripts don't, and it's the single
+  biggest false-positive trigger. Keep it that way.
+- **Code-sign the exe** (`signtool` with an Authenticode certificate). Signed
+  binaries build SmartScreen/Defender reputation and largely stop the flags —
+  this is the only real long-term fix for distribution.
+- **Report the false positive** to the vendor (for Defender:
+  [Microsoft's submission portal](https://www.microsoft.com/en-us/wdsi/filesubmission)) —
+  usually whitelisted within days.
+- As a local workaround, users can add an exclusion for the install folder, or
+  simply build from source themselves — a locally built exe with the exact
+  same code often isn't flagged, since detection keys on the specific binary
+  hash.
 
 ## Development setup
 
@@ -96,11 +190,79 @@ See [CLAUDE.md](CLAUDE.md) for architecture and contribution conventions, and
 Everything is stored locally under your user profile
 (`%LOCALAPPDATA%\CleanWispr` on Windows, `~/.local/share/cleanwispr` +
 `~/.cache/cleanwispr` on Linux): settings (`config.json`), history
-(`history.db`), logs, downloaded models and engine binaries. Deleting that
-folder is a full factory reset. The AI model receives only your spoken
-command and the selected text — never your history.
+(`history.db`), logs, downloaded models and engine binaries. Models can
+optionally live anywhere — e.g. on another disk — via **Settings →
+Transcription → Model storage location**. **Settings → General → Clear app
+data** deletes everything CleanWispr stored on your PC (a full factory reset /
+pre-uninstall cleanup). The AI model receives only your spoken command and the
+selected text — never your history.
 
 ## Changelog
+
+### 0.2.2
+
+**New**
+
+- **Guided first-run setup**: on a fresh install (no app data yet) a
+  step-by-step wizard walks you through choosing and downloading a
+  transcription engine + model, picking your language, and setting up Ollama
+  for the voice editor — re-runnable any time from Settings → General →
+  "Run setup guide"
+- **One-click launchers**: `start_windows.bat`, `start_linux.sh`, and
+  `start_macos.command` (repo root) create the Python environment, install
+  dependencies (re-installing automatically when `requirements.txt` changes),
+  and start the app — no Python knowledge needed; Windows launches windowless
+  via `pythonw`
+- **One-click build scripts**: `scripts/build_windows.bat`,
+  `scripts/build_linux.sh`, and `scripts/build_macos.command` bootstrap the
+  environment with build tooling and produce the standalone executable —
+  same zero-setup experience as the launchers
+
+- **Redesigned model manager** (Settings → Transcription): engine builds and
+  models are now clean card-style rows with an accent-highlighted ACTIVE
+  badge, compact Use / Download / Delete actions, a slim inline progress bar,
+  and a "Recommended" tag — replacing the old grid of oversized buttons; the
+  tab scrolls smoothly
+- **Custom model storage location**: point model downloads at any folder
+  (e.g. another disk) in Settings → Transcription; the default stays in the
+  user cache dir
+- **Clear app data**: one button in Settings → General deletes settings,
+  history, logs, models, and engine binaries — like an uninstall
+- **About tab**: version, author, and all open-source projects CleanWispr is
+  built on, with links and licenses
+- **History on/off switch**: new toggle at the top of the History tab —
+  when off, dictations and edits are still pasted but never written to
+  `history.db`
+- **Redesigned history browser**: the entry table is replaced with card-style
+  rows — kind badges (DICTATION / EDIT), an EDITED marker, and a wrapped
+  two-line text preview that no longer truncates after a few characters
+- **Modern toggle switches**: every checkbox replaced with an animated
+  sliding switch matching the app theme
+- **Restyled buttons app-wide**: rounded, theme-consistent buttons replace
+  qt-material's pink defaults
+- **Keep-model-loaded picker**: the free-text Ollama keep-alive field is now
+  a number + unit dropdown (seconds / minutes / hours / forever) — no more
+  typos in the duration format
+- **Clearer language & dictionary settings**: the Transcription tab now
+  explains what the language choice and custom dictionary mean per engine
+  (Whisper honors both; Parakeet auto-detects and has no dictionary), with a
+  live notice when Parakeet is active and those settings don't apply
+- **Clickable paths**: folder paths shown in Settings (recordings folder,
+  config, data, model storage) open in your file manager after confirmation
+- **Resizable settings window**: shrinks to small laptop screens; all tabs
+  gained scroll support
+- **Linux and macOS build scripts** (`scripts/build_linux.py`,
+  `scripts/build_macos.py`) plus full build documentation, including the
+  antivirus false-positive workarounds for Windows
+
+**Fixed**
+
+- Whisper model rows showed **ACTIVE** even when the Parakeet engine was
+  selected — both engines appeared active at once; the badge now tracks the
+  actually selected engine
+- Selecting a Whisper model with "Use" while Parakeet was active silently did
+  nothing; it now switches the engine back to Whisper (mirroring how Parakeet
+  selection already worked)
 
 ### 0.2.0
 
@@ -138,6 +300,6 @@ command and the selected text — never your history.
 CleanWispr reuses architectural patterns, model registry data, prompt
 engineering, and platform-integration recipes from
 [OpenWhispr](https://github.com/OpenWhispr/openwhispr) (MIT License). Speech
-recognition by [whisper.cpp](https://github.com/ggerganov/whisper.cpp);
+recognition by [whisper.cpp](https://github.com/ggml-org/whisper.cpp);
 local LLM serving by [Ollama](https://ollama.com); UI theme by
 [qt-material](https://github.com/UN-GCPDS/qt-material).
