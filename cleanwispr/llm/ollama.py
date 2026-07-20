@@ -15,6 +15,7 @@ import httpx
 from cleanwispr.llm.base import (
     ChatMessage,
     ChatOptions,
+    InstallableModel,
     LlmModelInfo,
     LlmProvider,
     LlmProviderError,
@@ -23,6 +24,99 @@ from cleanwispr.llm.base import (
 log = logging.getLogger(__name__)
 
 _CHAT_TIMEOUT = httpx.Timeout(connect=5, read=600, write=30, pool=30)
+
+# Models from the Ollama library. Ollama has no public "browse the library" API,
+# so — like OpenWhispr's static model registry — we ship a hand-picked list the
+# user can search/filter (any model can still be installed by exact name via the
+# pull box). size_gb ≈ the Q4 download; min_memory_gb is the GPU/unified/RAM
+# headroom to run it smoothly (weights + KV cache + overhead).
+#
+# `recommended=True` marks the vetted general-purpose instruct models the
+# hardware recommender may auto-pick; the rest are for browsing.
+_CATALOG: tuple[InstallableModel, ...] = (
+    # --- Gemma (Google) ---
+    InstallableModel(
+        "gemma3:1b", "Gemma 3 1B", "Tiny and fast — runs on almost anything",
+        size_gb=0.8, min_memory_gb=2.0, family="gemma", recommended=True,
+    ),
+    InstallableModel(
+        "gemma3:4b", "Gemma 3 4B", "Great all-rounder for most PCs",
+        size_gb=3.3, min_memory_gb=5.0, family="gemma", recommended=True,
+    ),
+    InstallableModel(
+        "gemma4:12b", "Gemma 4 12B", "High quality — needs a capable GPU",
+        size_gb=8.1, min_memory_gb=10.0, family="gemma", recommended=True,
+    ),
+    InstallableModel(
+        "gemma4:26b", "Gemma 4 26B", "Excellent quality for high-VRAM GPUs",
+        size_gb=16.0, min_memory_gb=16.0, family="gemma", recommended=True,
+    ),
+    InstallableModel(
+        "gemma4:31b", "Gemma 4 31B", "Best quality — for 24 GB+ GPUs / big Macs",
+        size_gb=19.0, min_memory_gb=23.0, family="gemma", recommended=True,
+    ),
+    # --- Qwen (Alibaba) ---
+    InstallableModel(
+        "qwen3:1.7b", "Qwen 3 1.7B", "Very small, capable for its size",
+        size_gb=1.4, min_memory_gb=3.0, family="qwen",
+    ),
+    InstallableModel(
+        "qwen3:4b", "Qwen 3 4B", "Lightweight and sharp at following instructions",
+        size_gb=2.6, min_memory_gb=5.0, family="qwen",
+    ),
+    InstallableModel(
+        "qwen3:8b", "Qwen 3 8B", "Strong instruction-following at a modest size",
+        size_gb=5.2, min_memory_gb=7.0, family="qwen", recommended=True,
+    ),
+    InstallableModel(
+        "qwen3:14b", "Qwen 3 14B", "High quality, needs a good GPU",
+        size_gb=9.3, min_memory_gb=12.0, family="qwen",
+    ),
+    InstallableModel(
+        "qwen2.5:7b", "Qwen 2.5 7B", "Proven all-rounder, good for editing",
+        size_gb=4.7, min_memory_gb=7.0, family="qwen",
+    ),
+    # --- Llama (Meta) ---
+    InstallableModel(
+        "llama3.2:1b", "Llama 3.2 1B", "Tiny Meta model for low-end machines",
+        size_gb=1.3, min_memory_gb=2.5, family="llama",
+    ),
+    InstallableModel(
+        "llama3.2:3b", "Llama 3.2 3B", "Small and fast, solid general use",
+        size_gb=2.0, min_memory_gb=4.0, family="llama",
+    ),
+    InstallableModel(
+        "llama3.1:8b", "Llama 3.1 8B", "Popular general-purpose model",
+        size_gb=4.9, min_memory_gb=7.0, family="llama",
+    ),
+    # --- Mistral ---
+    InstallableModel(
+        "mistral:7b", "Mistral 7B", "Fast, well-rounded classic",
+        size_gb=4.1, min_memory_gb=6.0, family="mistral",
+    ),
+    InstallableModel(
+        "mistral-nemo:12b", "Mistral Nemo 12B", "Larger Mistral, strong quality",
+        size_gb=7.1, min_memory_gb=10.0, family="mistral",
+    ),
+    # --- Phi (Microsoft) ---
+    InstallableModel(
+        "phi4:14b", "Phi-4 14B", "Microsoft's capable reasoning model",
+        size_gb=9.1, min_memory_gb=12.0, family="phi",
+    ),
+    InstallableModel(
+        "phi3:3.8b", "Phi-3 Mini", "Small Microsoft model, efficient",
+        size_gb=2.2, min_memory_gb=4.0, family="phi",
+    ),
+    # --- DeepSeek (reasoning) ---
+    InstallableModel(
+        "deepseek-r1:7b", "DeepSeek-R1 7B", "Reasoning model — shows its thinking",
+        size_gb=4.7, min_memory_gb=7.0, family="deepseek",
+    ),
+    InstallableModel(
+        "deepseek-r1:8b", "DeepSeek-R1 8B", "Reasoning model, a bit stronger",
+        size_gb=5.2, min_memory_gb=7.5, family="deepseek",
+    ),
+)
 
 _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-:/]*$")
 _COMMAND_RE = re.compile(r"^(?:ollama\s+(?P<verb>pull|run)\s+)?(?P<model>\S+)\s*$", re.IGNORECASE)
@@ -53,6 +147,7 @@ def parse_pull_command(text: str, *, interpret_run_as_pull: bool = True) -> tupl
 
 class OllamaProvider(LlmProvider):
     name = "ollama"
+    supports_install = True
 
     def __init__(
         self, base_url: str = "http://127.0.0.1:11434", client: httpx.Client | None = None
@@ -60,6 +155,9 @@ class OllamaProvider(LlmProvider):
         self._base = base_url.rstrip("/")
         self._client = client or httpx.Client(timeout=_CHAT_TIMEOUT)
         self._thinking_cache: dict[str, bool] = {}
+
+    def catalog(self) -> list[InstallableModel]:
+        return list(_CATALOG)
 
     def _url(self, path: str) -> str:
         return f"{self._base}{path}"
@@ -176,6 +274,19 @@ class OllamaProvider(LlmProvider):
                         progress(data.get("completed", 0), total)
         except httpx.HTTPError as exc:
             raise self._unreachable(exc) from exc
+
+    def delete_model(self, model_id: str) -> None:
+        """Remove an installed model via /api/delete."""
+        try:
+            response = self._client.request(
+                "DELETE", self._url("/api/delete"), json={"model": model_id}, timeout=30
+            )
+        except httpx.HTTPError as exc:
+            raise self._unreachable(exc) from exc
+        if response.status_code not in (200, 404):
+            raise LlmProviderError(
+                f"Ollama could not delete {model_id}: {response.text[:200]}"
+            )
 
     def supports_thinking(self, model_id: str) -> bool:
         """Does the model expose reasoning tokens? (/api/show capabilities)."""

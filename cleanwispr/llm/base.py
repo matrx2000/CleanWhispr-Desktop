@@ -9,6 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from threading import Event
 
 
 @dataclass(slots=True)
@@ -18,6 +19,37 @@ class LlmModelInfo:
     parameter_size: str | None = None  # e.g. "7.6B"
     quantization: str | None = None  # e.g. "Q4_K_M"
     context_length: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InstallableModel:
+    """One model a provider can download on demand, described richly enough for
+    a hardware-aware recommendation (see llm.hardware.recommend_from_catalog).
+
+    Providers ship a curated catalog so a non-technical user can pick a model
+    from a list and have it fetched — no terminal, no knowing model names. The
+    metadata is provider-neutral so the same recommender works for any backend.
+    """
+
+    id: str  # provider-native pull id, e.g. "gemma3:4b"
+    label: str  # human name, e.g. "Gemma 3 4B"
+    description: str  # one-line "what it's good for"
+    size_gb: float  # approximate download size
+    min_memory_gb: float  # GPU/unified/RAM needed to run it comfortably
+    family: str = ""  # "gemma", "qwen", "llama" — for grouping/search
+    recommended: bool = False  # a vetted default the recommender may pick
+
+    def matches(self, query: str) -> bool:
+        """Case-insensitive search over id/label/family/description."""
+        q = query.strip().lower()
+        if not q:
+            return True
+        fields = (self.id, self.label, self.family, self.description)
+        return any(q in field.lower() for field in fields)
+
+
+# progress(completed_bytes, total_bytes); total may be 0 before it's known
+PullProgressFn = Callable[[int, int], None]
 
 
 @dataclass(slots=True)
@@ -75,3 +107,31 @@ class LlmProvider(ABC):
     def load_model(self, model_id: str, keep_alive: str = "10m") -> None:
         """Block until the model is loaded (no-op for providers without the concept)."""
         return None  # deliberate non-abstract default
+
+    # --- in-app model installation (optional capability) ---
+
+    supports_install: bool = False  # can this provider download models on demand?
+
+    def catalog(self) -> list[InstallableModel]:
+        """Curated models the user can install from within the app. Empty when
+        the provider can't download models (e.g. a remote endpoint you point at
+        an already-served model)."""
+        return []
+
+    def pull(
+        self,
+        model_id: str,
+        *,
+        progress: PullProgressFn | None = None,
+        cancel: Event | None = None,
+    ) -> None:
+        """Download/install a model, reporting byte progress and honouring a
+        cancel Event. Providers without the capability raise LlmProviderError."""
+        raise LlmProviderError(
+            f"{self.name} cannot download models from inside the app — install "
+            "the model in that tool first."
+        )
+
+    def delete_model(self, model_id: str) -> None:
+        """Remove an installed model. Providers without the capability raise."""
+        raise LlmProviderError(f"{self.name} cannot delete models from inside the app.")

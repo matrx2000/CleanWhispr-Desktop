@@ -145,6 +145,7 @@ class ModelRow(QFrame):
     download_clicked = Signal()
     delete_clicked = Signal()
     use_clicked = Signal()
+    cancel_clicked = Signal()
 
     def __init__(
         self,
@@ -173,10 +174,10 @@ class ModelRow(QFrame):
         title_label = QLabel(title)
         title_label.setObjectName("rowTitle")
         title_row.addWidget(title_label)
-        if tag:
-            tag_label = QLabel(tag)
-            tag_label.setObjectName("rowTag")
-            title_row.addWidget(tag_label)
+        self._tag_label = QLabel(tag or "")
+        self._tag_label.setObjectName("rowTag")
+        self._tag_label.setVisible(bool(tag))
+        title_row.addWidget(self._tag_label)
         title_row.addStretch()
         text_col.addLayout(title_row)
         subtitle_label = QLabel(subtitle)
@@ -208,6 +209,8 @@ class ModelRow(QFrame):
         self._use = _button("Use", "rowUse", self.use_clicked)
         self._download = _button("Download", "rowDownload", self.download_clicked)
         self._delete = _button("Delete", "rowDelete", self.delete_clicked)
+        # shown only mid-download (see set_busy); lets the user abort a big fetch
+        self._cancel = _button("Cancel", "rowDelete", self.cancel_clicked)
 
     def set_state(self, installed: bool, active: bool = False) -> None:
         self._installed, self._active = installed, active
@@ -226,8 +229,10 @@ class ModelRow(QFrame):
         self.style().polish(self)
 
     def set_busy(self, busy: bool) -> None:
-        """While a download runs: hide actions, show the slim progress bar."""
+        """While a download runs: hide the normal actions, show the slim progress
+        bar and a Cancel button."""
         self._progress.setVisible(busy)
+        self._cancel.setVisible(busy)
         if busy:
             self._progress.setRange(0, 0)  # indeterminate until the size is known
             for widget in (self._badge, self._use, self._download, self._delete):
@@ -239,6 +244,12 @@ class ModelRow(QFrame):
         if isinstance(total, int) and total > 0:
             self._progress.setRange(0, 100)
             self._progress.setValue(int(received * 100 / total))
+
+    def set_tag(self, tag: str | None) -> None:
+        """Show/replace/clear the small pill next to the title (e.g. a runtime
+        'Recommended for your GPU' marker)."""
+        self._tag_label.setText(tag or "")
+        self._tag_label.setVisible(bool(tag))
 
 
 class ToggleSwitch(QWidget):

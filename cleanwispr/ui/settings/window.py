@@ -9,8 +9,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QImage, QTextDocument
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -63,6 +63,67 @@ _CREDITS: list[tuple[str, str, str]] = [
 ]
 
 
+# dark, readable rich-text styling for the README (overrides qt-material's
+# pink defaults): near-white body text, white headings, accent-coloured links,
+# surface-toned code/table chrome
+_README_CSS = f"""
+body {{ color: {theme.TEXT}; line-height: 145%; }}
+h1, h2, h3, h4, h5, h6 {{ color: #ffffff; }}
+a {{ color: {ACCENT_SOFT}; text-decoration: none; }}
+code {{ background: {theme.SURFACE_2}; color: {theme.TEXT}; }}
+pre {{ background: {theme.SURFACE_2}; color: {theme.TEXT}; padding: 8px; }}
+th, td {{ border: 1px solid {theme.BORDER}; padding: 4px 9px; }}
+th {{ color: #ffffff; background: {theme.SURFACE_2}; }}
+blockquote {{ color: {theme.MUTED}; }}
+"""
+
+
+class _ReadmeBrowser(QTextBrowser):
+    """QTextBrowser that renders README images scaled to fit its width, so wide
+    screenshots never force horizontal scrolling."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._markdown = ""
+        self._rendered_width = 0
+
+    def render_markdown(self, text: str, base_dir: Path) -> None:
+        self._markdown = text
+        self.document().setBaseUrl(QUrl.fromLocalFile(str(base_dir) + "/"))
+        self._rendered_width = self.viewport().width()
+        self.setMarkdown(text)
+
+    def loadResource(self, type_: int, name: QUrl):  # Qt override, keeps Qt naming
+        if type_ == QTextDocument.ResourceType.ImageResource:
+            path = self._local_image(name)
+            if path is not None:
+                image = QImage(str(path))
+                max_width = max(200, self.viewport().width() - 36)
+                if not image.isNull() and image.width() > max_width:
+                    return image.scaledToWidth(
+                        max_width, Qt.TransformationMode.SmoothTransformation
+                    )
+                if not image.isNull():
+                    return image
+        return super().loadResource(type_, name)
+
+    def _local_image(self, name: QUrl) -> Path | None:
+        url = name if isinstance(name, QUrl) else QUrl(str(name))
+        local = self.document().baseUrl().resolved(url).toLocalFile()
+        path = Path(local) if local else None
+        return path if path and path.exists() else None
+
+    def resizeEvent(self, event) -> None:  # Qt override
+        super().resizeEvent(event)
+        # re-fit images when the width changes materially, preserving scroll
+        if self._markdown and abs(self.viewport().width() - self._rendered_width) > 24:
+            self._rendered_width = self.viewport().width()
+            bar = self.verticalScrollBar()
+            fraction = bar.value() / bar.maximum() if bar.maximum() else 0.0
+            self.setMarkdown(self._markdown)
+            bar.setValue(round(fraction * bar.maximum()))
+
+
 class _ReadmeWindow(QMainWindow):
     """The project README rendered as rich text (GitHub-style) in its own
     resizable/maximizable window."""
@@ -73,16 +134,16 @@ class _ReadmeWindow(QMainWindow):
         self.setMinimumSize(420, 320)
         self.resize(860, 680)
 
-        browser = QTextBrowser()
+        browser = _ReadmeBrowser()
         browser.setOpenExternalLinks(True)
+        browser.setStyleSheet(
+            f"QTextBrowser {{ background: {theme.BG}; color: {theme.TEXT}; border: none; }}"
+        )
         browser.document().setDocumentMargin(18)
+        browser.document().setDefaultStyleSheet(_README_CSS)
         readme = Path(__file__).resolve().parents[3] / "README.md"
         if readme.exists():
-            # base URL makes relative links/images (docs/images/…) resolve
-            browser.document().setBaseUrl(
-                QUrl.fromLocalFile(str(readme.parent) + "/")
-            )
-            browser.setMarkdown(readme.read_text(encoding="utf-8"))
+            browser.render_markdown(readme.read_text(encoding="utf-8"), readme.parent)
         else:
             browser.setPlainText(
                 "README.md was not found next to the app (it is not bundled "

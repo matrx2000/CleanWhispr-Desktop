@@ -1,9 +1,10 @@
 import json
+from threading import Event
 
 import httpx
 import pytest
 
-from cleanwispr.llm.base import ChatMessage, ChatOptions, LlmProviderError
+from cleanwispr.llm.base import ChatMessage, ChatOptions, LlmProvider, LlmProviderError
 from cleanwispr.llm.ollama import OllamaProvider, parse_pull_command
 
 
@@ -58,6 +59,92 @@ def test_pull_error_raises():
 
     with pytest.raises(LlmProviderError, match="not found"):
         make_provider(handler).pull("nope:1b")
+
+
+def test_pull_stops_when_cancelled():
+    def handler(request):
+        lines = [json.dumps({"total": 1000, "completed": i}) for i in (100, 200, 300, 400)]
+        return httpx.Response(200, content="\n".join(lines).encode())
+
+    cancel = Event()
+    seen = []
+
+    def progress(completed, total):
+        seen.append(completed)
+        cancel.set()  # cancel after the first progress line
+
+    make_provider(handler).pull("qwen3:8b", progress=progress, cancel=cancel)
+    assert seen == [100]  # stopped instead of draining all four lines
+
+
+def test_delete_model_sends_delete_request():
+    seen = {}
+
+    def handler(request):
+        assert request.method == "DELETE"
+        assert request.url.path == "/api/delete"
+        seen.update(json.loads(request.content))
+        return httpx.Response(200)
+
+    make_provider(handler).delete_model("gemma3:4b")
+    assert seen["model"] == "gemma3:4b"
+
+
+def test_delete_model_tolerates_missing():
+    make_provider(lambda request: httpx.Response(404)).delete_model("gone:1b")  # no raise
+
+
+def test_ollama_advertises_install_and_a_catalog():
+    provider = OllamaProvider()
+    assert provider.supports_install is True
+    catalog = provider.catalog()
+    assert catalog and all(m.size_gb > 0 and m.min_memory_gb > 0 for m in catalog)
+
+
+def test_catalog_spans_families_beyond_gemma_and_marks_recommendations():
+    catalog = OllamaProvider().catalog()
+    families = {m.family for m in catalog}
+    # the search list must offer more than just gemma
+    assert {"gemma", "qwen", "llama", "mistral"} <= families
+    assert len(families) >= 5
+    recommended = [m for m in catalog if m.recommended]
+    assert recommended and len(recommended) < len(catalog)  # a vetted subset
+
+
+def test_installable_model_search_matches_id_family_and_description():
+    catalog = OllamaProvider().catalog()
+    by_id = {m.id: m for m in catalog}
+    llama = next(m for m in catalog if m.family == "llama")
+    assert llama.matches("LLAMA")  # case-insensitive on family
+    assert llama.matches(llama.id)  # matches its own id
+    assert by_id["deepseek-r1:7b"].matches("reasoning")  # matches description
+    assert not by_id["gemma3:1b"].matches("mistral")
+    assert by_id["gemma3:1b"].matches("")  # empty query matches everything
+
+
+def test_base_provider_defaults_reject_install():
+    class Bare(LlmProvider):
+        name = "bare"
+
+        def is_available(self):
+            return True
+
+        def list_models(self):
+            return []
+
+        def model_info(self, model_id):
+            raise NotImplementedError
+
+        def chat(self, messages, options, on_thinking=None):
+            yield ""
+
+    bare = Bare()
+    assert bare.supports_install is False
+    assert bare.catalog() == []
+    with pytest.raises(LlmProviderError):
+        bare.pull("x")
+    with pytest.raises(LlmProviderError):
+        bare.delete_model("x")
 
 
 def make_provider(handler) -> OllamaProvider:

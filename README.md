@@ -1,6 +1,6 @@
 # CleanWispr
 
-**Version 0.2.4** · Local voice-to-text and voice-driven text editing for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
+**Version 0.2.5** · Local voice-to-text and voice-driven text editing for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
 
 ## What it does
 
@@ -22,8 +22,8 @@
 
 | Area | Highlights |
 |---|---|
-| **Transcription** | Two engines: **whisper.cpp** (CPU / **CUDA** / Vulkan builds, Metal on macOS; 6 model sizes Tiny → Large-v3 + Turbo; 60+ languages; custom dictionary) and **NVIDIA Parakeet** via sherpa-onnx (in-process, extremely fast even on CPU; multilingual v3 with auto language detection). All models downloaded in-app with progress |
-| **Voice editor** | Ollama model auto-discovery with parameter/quantization/context info; install models by pasting `ollama pull …` commands (name-only extraction — nothing is executed); auto-starts Ollama if it isn't running; hardened prompts (selection is data, output-only) |
+| **Transcription** | Two engines: **whisper.cpp** (CPU / **CUDA** / Vulkan builds, Metal on macOS; 6 model sizes Tiny → Large-v3 + Turbo; 60+ languages; custom dictionary) and **NVIDIA Parakeet** via sherpa-onnx (in-process, extremely fast even on CPU; multilingual v3 with auto language detection). All models downloaded in-app with progress **and cancel**; the engine-build picker **auto-detects your GPU** and marks the recommended build (CUDA/Vulkan/CPU) |
+| **Voice editor** | Ollama model auto-discovery with parameter/quantization/context info; **hardware-aware model recommendations** (best-quality vs. smallest-usable for your GPU/RAM); **searchable model library** across families (Gemma, Qwen, Llama, Mistral, Phi, DeepSeek…) with **one-click install** — or install anything by name via `ollama pull …` (name-only extraction, nothing executed); auto-starts Ollama if it isn't running; hardened prompts (selection is data, output-only). The install/recommend flow is provider-agnostic — a future non-Ollama backend gets it for free |
 | **Live feedback** | Overlay pill narrates every stage: mic warm-up → recording (level-reactive) → transcribing → model loading (with seconds counter) → writing → pasting; **thinking panel** streams reasoning models' thoughts as markdown, with the exact command + selection that was sent; synthesized audio cues (toggleable) |
 | **Hotkeys** | Two global shortcuts (dictation / editor), click-to-capture UI, toggle or push-to-hold per slot, Esc cancels, overlap-conflict validation with clear explanations |
 | **History** | Searchable local SQLite log of every dictation and edit (with instruction + original text for edits); entries are editable with an "edited" audit flag; confirmed clear-all; audio recordings NOT kept unless you opt in |
@@ -45,9 +45,11 @@ afterwards they just start it. The only prerequisite is
 
 The app appears as a microphone icon in the system tray, and on first start a
 **guided setup** walks you through downloading a transcription engine + model
-(~220 MB for the recommended Base model), picking your language, and optionally
-setting up [Ollama](https://ollama.com) for the voice editor (paste
-`ollama pull qwen3:8b` into Settings → Voice Editor to fetch an editing model).
+(~220 MB for the recommended Base model) — offering **GPU acceleration** when it
+detects a compatible graphics card — picking your language, and optionally
+setting up [Ollama](https://ollama.com) for the voice editor, where the wizard
+detects your hardware, recommends a right-sized model, and downloads it for you
+(Best-quality or Smallest-usable), all without leaving the app.
 On Windows you can then enable **Settings → General → Start CleanWispr when
 Windows starts** and forget about the script entirely.
 
@@ -208,6 +210,50 @@ pre-uninstall cleanup). The AI model receives only your spoken command and the
 selected text — never your history.
 
 ## Changelog
+
+### 0.2.5
+
+**New**
+
+- **Setup guide now offers GPU transcription**: the engine step detects your
+  graphics card and, when a compatible GPU is found, pre-checks an **Enable GPU
+  acceleration** option that downloads the right whisper.cpp build (**CUDA** for
+  NVIDIA, **Vulkan** for AMD) alongside the CPU fallback — so first-time users
+  aren't stuck on slow CPU transcription without realising a much faster option
+  exists (no GPU → a note steers you to a smaller, snappier model)
+- **Install voice-editor models without the terminal**: Settings → Voice Editor
+  gained a **searchable model library** spanning many families (Gemma, Qwen,
+  Llama, Mistral, Phi, DeepSeek…) — search or filter, pick one, and CleanWispr
+  downloads it through Ollama with a live progress bar and a **Cancel** button.
+  The paste-a-command box stays for installing anything by exact name
+- **Two-tier hardware recommendations**: the editor settings and the setup
+  wizard now suggest both a **Best-quality** and a **Smallest-usable** model for
+  your machine (real VRAM / unified-memory / RAM budgeting, with a CPU cap so a
+  giant model is never recommended for a machine that would run it at a crawl),
+  each installable with one click
+- **Full Ollama setup inside the first-run wizard**: it detects whether Ollama
+  is installed and running, offers **Start Ollama** or an install link
+  accordingly, and downloads your chosen model right there — then selects it for
+  the voice editor. No more copy-pasting `ollama pull` commands afterwards
+- **GPU auto-detection for engine builds**: the Transcription tab detects your
+  accelerator and marks the matching whisper.cpp build (**CUDA** for NVIDIA,
+  **Vulkan** for AMD, CPU otherwise) as *Recommended*
+- **Cancellable downloads**: every in-app download — Whisper/Parakeet models,
+  engine builds, and Ollama model pulls — can now be cancelled mid-flight
+
+**Changed**
+
+- The model recommender is now **provider-agnostic**: it works off a
+  provider-supplied catalog with memory metadata, so a future non-Ollama LLM
+  backend gets in-app install + recommendations for free
+
+**Fixed**
+
+- **In-app README viewer** (About → Open README) now renders readable
+  light-text-on-dark instead of hard-to-read pink, and **scales screenshots to
+  fit the window** (re-fitting on resize) instead of overflowing
+- **Cancelling a download** no longer emits a Qt "failed to disconnect" warning
+  — each row's Cancel button is wired once and routes to the active download
 
 ### 0.2.4
 

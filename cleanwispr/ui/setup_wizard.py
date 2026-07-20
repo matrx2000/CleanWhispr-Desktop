@@ -28,15 +28,21 @@ from PySide6.QtWidgets import (
 )
 
 from cleanwispr.llm import factory, hardware
+from cleanwispr.llm import server as ollama_server
 from cleanwispr.storage.settings import Settings
 from cleanwispr.stt import downloader, registry
 from cleanwispr.stt.languages import LANGUAGES
 from cleanwispr.ui import theme
 from cleanwispr.ui.tasks import AsyncTask, DownloadTask
-from cleanwispr.ui.widgets import ACCENT_SOFT
+from cleanwispr.ui.widgets import ACCENT_SOFT, LabeledToggle
 
 _WHISPER_MODEL = "base"  # the recommended starter model
 _PARAKEET_MODEL = "parakeet-tdt-0.6b-v3"
+
+# discrete-GPU accelerator → the whisper-server build that uses it (Apple's Metal
+# is baked into the single macOS build, so it needs no separate download)
+_GPU_VARIANT: dict[str, str] = {"nvidia": "cuda", "amd": "vulkan"}
+_VARIANT_LABEL: dict[str, str] = {"cuda": "CUDA", "vulkan": "Vulkan"}
 
 _CARD_QSS = f"""
 QFrame#wizardCard {{
@@ -170,6 +176,7 @@ class SetupWizard(QDialog):
         self._next_button.setText("Finish" if index == self._pages.count() - 1 else "Next")
         self._next_button.setEnabled(True)  # page 1 may re-disable below
         if index == 1:
+            self._detect_engine_hardware()
             self._update_engine_state()
         if index == 3:
             self._check_ollama()
@@ -235,12 +242,32 @@ class SetupWizard(QDialog):
         layout.addWidget(self._whisper_card)
         layout.addWidget(self._parakeet_card)
 
-        hint = self._body(
-            "Tip: have an NVIDIA graphics card? After setup, grab the CUDA "
-            "engine build in Settings → Transcription — it's ~25x faster."
+        # hardware-aware GPU acceleration prompt (filled in once detection runs).
+        # CPU transcription is slow, so when a GPU is found we offer its build and
+        # pre-check it — a big speed-up the user would otherwise never discover.
+        self._gpu_variant: str | None = None
+        self._engine_hw = None
+        self._gpu_frame = QFrame()
+        self._gpu_frame.setObjectName("wizardCard")
+        self._gpu_frame.setStyleSheet(_CARD_QSS)
+        gpu_layout = QVBoxLayout(self._gpu_frame)
+        gpu_layout.setContentsMargins(14, 10, 14, 10)
+        gpu_layout.setSpacing(4)
+        self._gpu_toggle = LabeledToggle(
+            "⚡ Enable GPU acceleration — much faster than CPU (recommended)"
         )
-        hint.setStyleSheet(f"color: {theme.MUTED}; font-size: 11px;")
-        layout.addWidget(hint)
+        self._gpu_toggle.setChecked(True)
+        gpu_layout.addWidget(self._gpu_toggle)
+        self._gpu_detail = QLabel()
+        self._gpu_detail.setWordWrap(True)
+        self._gpu_detail.setStyleSheet(f"color: {theme.MUTED}; font-size: 11px;")
+        gpu_layout.addWidget(self._gpu_detail)
+        self._gpu_frame.setVisible(False)
+        layout.addWidget(self._gpu_frame)
+
+        self._cpu_note = self._body("Checking for a graphics card…")
+        self._cpu_note.setStyleSheet(f"color: {theme.MUTED}; font-size: 11px;")
+        layout.addWidget(self._cpu_note)
         layout.addStretch()
 
         self._engine_status = QLabel(" ")
@@ -281,14 +308,85 @@ class SetupWizard(QDialog):
                 "your PC meanwhile."
             )
             self._engine_status.setStyleSheet(f"color: {theme.MUTED};")
+        self._refresh_gpu_section()
+
+    def _detect_engine_hardware(self) -> None:
+        if getattr(self, "_engine_hw_done", False):
+            return
+        self._engine_hw_done = True
+        task = AsyncTask(hardware.detect)
+        self._tasks.append(task)
+
+        def done(result: object) -> None:
+            self._tasks.remove(task)
+            self._engine_hw = result if isinstance(result, hardware.Hardware) else None
+            variant = _GPU_VARIANT.get(self._engine_hw.kind) if self._engine_hw else None
+            # only offer a build this platform actually ships
+            self._gpu_variant = variant if variant in registry.server_variants() else None
+            self._refresh_gpu_section()
+
+        task.done.connect(done)
+        task.failed.connect(lambda _m: (self._tasks.remove(task), self._refresh_gpu_section()))
+        task.start()
+
+    def _refresh_gpu_section(self) -> None:
+        """Show the GPU-acceleration prompt when a compatible GPU was found and
+        Whisper is selected (Parakeet runs its own in-process runtime)."""
+        whisper = self._chosen_whisper()
+        offer_gpu = whisper and bool(self._gpu_variant)
+        self._gpu_frame.setVisible(offer_gpu)
+        if offer_gpu:
+            label = _VARIANT_LABEL[self._gpu_variant]
+            name = self._engine_hw.name if self._engine_hw else "your GPU"
+            extra = (
+                " It's already installed."
+                if registry.is_server_installed(self._gpu_variant)
+                else " Ticking this adds its build to the download."
+            )
+            self._gpu_detail.setText(
+                f"Detected <b>{name}</b>. The <b>{label}</b> build runs transcription "
+                f"on your graphics card — often many times faster than the CPU, so "
+                f"dictation appears almost instantly.{extra}"
+            )
+        # CPU-only guidance when there's no discrete GPU build to offer
+        done = getattr(self, "_engine_hw_done", False)
+        if not whisper:
+            self._cpu_note.setText(
+                "Parakeet runs fast on the CPU — no GPU setup needed."
+            )
+            self._cpu_note.setVisible(True)
+        elif offer_gpu:
+            self._cpu_note.setVisible(False)
+        elif done and self._engine_hw and self._engine_hw.kind == "apple":
+            self._cpu_note.setText(
+                "Your Mac's GPU (Metal) acceleration is built in — nothing to add."
+            )
+            self._cpu_note.setVisible(True)
+        elif done:
+            self._cpu_note.setText(
+                "No dedicated GPU detected — transcription will run on the CPU. "
+                "Pick a smaller model (Base or Small) to keep it responsive."
+            )
+            self._cpu_note.setVisible(True)
+        else:
+            self._cpu_note.setText("Checking for a graphics card…")
+            self._cpu_note.setVisible(whisper)
 
     def _start_download(self) -> None:
         """Download the missing pieces for the chosen engine, one after another."""
         self._apply_engine_choice()
         if self._chosen_whisper():
             steps = []
+            # the CPU build is always fetched as the runtime fallback
             if not registry.is_server_installed("cpu"):
-                steps.append(("engine", partial(downloader.download_server_binary, "cpu")))
+                steps.append(("CPU engine", partial(downloader.download_server_binary, "cpu")))
+            variant = self._gpu_variant
+            want_gpu = variant and self._gpu_toggle.isChecked()
+            if want_gpu and not registry.is_server_installed(variant):
+                steps.append((
+                    f"{_VARIANT_LABEL[variant]} GPU engine",
+                    partial(downloader.download_server_binary, variant),
+                ))
             if not registry.is_model_installed(_WHISPER_MODEL):
                 steps.append(("model", partial(downloader.download_model, _WHISPER_MODEL)))
         else:
@@ -384,39 +482,60 @@ class SetupWizard(QDialog):
     def _editor_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
         layout.addWidget(self._body(
             "The voice editor lets you <b>select text anywhere</b>, press the "
             "editor hotkey, and speak a change: <i>\"make this formal\"</i>, "
-            "<i>\"translate to English\"</i>, <i>\"remove the second "
-            "sentence\"</i>.<br><br>"
-            "It needs <b>Ollama</b>, a free app that runs AI models locally:"
-            "<ol>"
-            "<li>Install Ollama from the website below.</li>"
-            "<li>After this guide, open Settings → Voice Editor and paste the "
-            "recommended command shown below.</li>"
-            "</ol>"
-            "This step is optional — dictation works without it."
+            "<i>\"translate to English\"</i>. It runs on <b>Ollama</b>, a free "
+            "local AI runner. This step is optional — dictation works without it."
         ))
 
         self._hw_label = QLabel("Checking your hardware for a model recommendation…")
         self._hw_label.setWordWrap(True)
         self._hw_label.setTextFormat(Qt.TextFormat.RichText)
-        self._hw_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        self._hw_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._hw_label.setStyleSheet(
             f"background: {theme.SURFACE_2}; border: 1px solid {theme.BORDER}; "
             "border-radius: 8px; padding: 10px;"
         )
         layout.addWidget(self._hw_label)
 
+        # pick-a-model buttons (enabled once Ollama is running + hardware is known)
+        pick_row = QHBoxLayout()
+        self._best_button = QPushButton("Install best")
+        self._best_button.setEnabled(False)
+        self._best_button.clicked.connect(lambda: self._start_pull("quality"))
+        pick_row.addWidget(self._best_button)
+        self._small_button = QPushButton("Install smallest")
+        self._small_button.setEnabled(False)
+        self._small_button.clicked.connect(lambda: self._start_pull("small"))
+        pick_row.addWidget(self._small_button)
+        pick_row.addStretch()
+        layout.addLayout(pick_row)
+
+        self._pull_progress = QProgressBar()
+        self._pull_progress.setTextVisible(False)
+        self._pull_progress.setVisible(False)
+        layout.addWidget(self._pull_progress)
+        self._pull_cancel = QPushButton("Cancel download")
+        self._pull_cancel.setVisible(False)
+        self._pull_cancel.clicked.connect(self._cancel_pull)
+        cancel_row = QHBoxLayout()
+        cancel_row.addStretch()
+        cancel_row.addWidget(self._pull_cancel)
+        layout.addLayout(cancel_row)
+
+        # Ollama presence / control row
         row = QHBoxLayout()
-        website = QPushButton("Open ollama.com")
-        website.clicked.connect(
+        self._website_button = QPushButton("Install Ollama (ollama.com)")
+        self._website_button.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl("https://ollama.com"))
         )
-        row.addWidget(website)
+        row.addWidget(self._website_button)
+        self._start_ollama_button = QPushButton("Start Ollama")
+        self._start_ollama_button.setVisible(False)
+        self._start_ollama_button.clicked.connect(self._start_ollama)
+        row.addWidget(self._start_ollama_button)
         check = QPushButton("Check again")
         check.clicked.connect(self._check_ollama)
         row.addWidget(check)
@@ -429,10 +548,15 @@ class SetupWizard(QDialog):
         layout.addStretch()
         return page
 
+    def _provider(self):
+        return factory.create_provider(self._settings.llm)
+
     def _detect_hardware(self) -> None:
         if getattr(self, "_hw_done", False):
             return
         self._hw_done = True
+        self._best_id = "gemma3:4b"
+        self._small_id = "gemma3:1b"
 
         task = AsyncTask(hardware.detect)
         self._tasks.append(task)
@@ -441,20 +565,24 @@ class SetupWizard(QDialog):
             self._tasks.remove(task)
             if not isinstance(result, hardware.Hardware):
                 result = hardware.Hardware("cpu", "unknown hardware", None, None)
-            model, reason = hardware.recommended_ollama_model(result)
+            catalog = self._provider().catalog()
+            best, best_reason = hardware.recommend_from_catalog(catalog, result, "quality")
+            small, _ = hardware.recommend_from_catalog(catalog, result, "small")
+            self._best_id, self._small_id = best.id, small.id
             self._hw_label.setText(
                 f"<b>Detected:</b> {result.name}<br>"
-                f"<b>Recommended model:</b> <code>{model}</code> — {reason}.<br>"
-                f"Paste this in Settings → Voice Editor after installing Ollama:"
-                f"<br><code>ollama pull {model}</code>"
+                f"<b>Best quality:</b> {best.label} — {best_reason}.<br>"
+                f"<b>Smallest usable:</b> {small.label} (≈{small.size_gb:.1f} GB) — "
+                "faster and lighter."
             )
+            self._best_button.setText(f"Install {best.label} ({best.size_gb:.1f} GB)")
+            self._small_button.setText(f"Install {small.label} ({small.size_gb:.1f} GB)")
 
         def failed(_message: str) -> None:
             self._tasks.remove(task)
             self._hw_label.setText(
-                "Couldn't inspect your hardware — <code>gemma3:4b</code> is a "
-                "safe starting model on most machines:<br>"
-                "<code>ollama pull gemma3:4b</code>"
+                "Couldn't inspect your hardware — <b>Gemma 3 4B</b> is a safe "
+                "starting model on most machines."
             )
 
         task.done.connect(done)
@@ -464,26 +592,109 @@ class SetupWizard(QDialog):
     def _check_ollama(self) -> None:
         self._ollama_status.setText("Checking for Ollama…")
         self._ollama_status.setStyleSheet(f"color: {theme.MUTED};")
-        settings = self._settings
 
-        task = AsyncTask(lambda: factory.create_provider(settings.llm).is_available())
+        task = AsyncTask(lambda: self._provider().is_available())
         self._tasks.append(task)
 
         def done(available: object) -> None:
             self._tasks.remove(task)
-            if available:
-                self._ollama_status.setText("✓ Ollama is installed and running.")
-                self._ollama_status.setStyleSheet("color: #3dd68c;")
-            else:
-                self._ollama_status.setText(
-                    "Ollama was not found (it may not be installed or running). "
-                    "You can set it up any time later."
-                )
-                self._ollama_status.setStyleSheet(f"color: {theme.MUTED};")
+            self._set_ollama_ready(bool(available))
 
         task.done.connect(done)
         task.failed.connect(lambda _msg: done(False))
         task.start()
+
+    def _set_ollama_ready(self, running: bool) -> None:
+        """Reflect Ollama's state in the controls: enable model install when it's
+        up, offer Start when it's installed-but-stopped, or a download link."""
+        installed = ollama_server.find_ollama_binary() is not None
+        self._best_button.setEnabled(running)
+        self._small_button.setEnabled(running)
+        self._start_ollama_button.setVisible(installed and not running)
+        self._website_button.setVisible(not installed)
+        if running:
+            self._ollama_status.setText("✓ Ollama is running — pick a model above to install.")
+            self._ollama_status.setStyleSheet("color: #3dd68c;")
+        elif installed:
+            self._ollama_status.setText("Ollama is installed but not running — click Start Ollama.")
+            self._ollama_status.setStyleSheet(f"color: {theme.MUTED};")
+        else:
+            self._ollama_status.setText(
+                "Ollama isn't installed yet. Install it, then click Check again. "
+                "You can also set this up later in Settings."
+            )
+            self._ollama_status.setStyleSheet(f"color: {theme.MUTED};")
+
+    def _start_ollama(self) -> None:
+        self._ollama_status.setText("Starting Ollama…")
+        self._start_ollama_button.setEnabled(False)
+        provider = self._provider()
+
+        def done(ok: object) -> None:
+            self._start_ollama_button.setEnabled(True)
+            self._set_ollama_ready(bool(ok))
+
+        task = AsyncTask(lambda: ollama_server.ensure_running(provider))
+        self._tasks.append(task)
+        task.done.connect(lambda ok: (self._tasks.remove(task), done(ok)))
+        task.failed.connect(lambda _msg: (self._tasks.remove(task), done(False)))
+        task.start()
+
+    def _start_pull(self, prefer: str) -> None:
+        model = self._best_id if prefer == "quality" else self._small_id
+        self._ollama_status.setText(f"Downloading {model}…")
+        self._ollama_status.setStyleSheet(f"color: {theme.MUTED};")
+        self._best_button.setEnabled(False)
+        self._small_button.setEnabled(False)
+        self._pull_progress.setVisible(True)
+        self._pull_progress.setRange(0, 0)
+        self._pull_cancel.setVisible(True)
+
+        provider = self._provider()
+        task = DownloadTask(partial(provider.pull, model))
+        self._tasks.append(task)
+        self._pull_task = task
+        cancelled = {"flag": False}
+
+        def cleanup() -> None:
+            if task in self._tasks:
+                self._tasks.remove(task)
+            self._pull_progress.setVisible(False)
+            self._pull_cancel.setVisible(False)
+            self._best_button.setEnabled(True)
+            self._small_button.setEnabled(True)
+
+        def on_progress(completed: int, total: object) -> None:
+            if isinstance(total, int) and total > 0:
+                self._pull_progress.setRange(0, 100)
+                self._pull_progress.setValue(int(completed * 100 / total))
+
+        def on_finished() -> None:
+            cleanup()
+            self._settings.llm.ollama.model = model
+            self._on_change()
+            self._ollama_status.setText(f"✓ {model} installed and selected for the voice editor.")
+            self._ollama_status.setStyleSheet("color: #3dd68c;")
+
+        def on_failed(message: str) -> None:
+            cleanup()
+            if cancelled["flag"]:
+                self._ollama_status.setText(f"Download of {model} cancelled.")
+            else:
+                self._ollama_status.setText(f"Download failed: {message}")
+                self._ollama_status.setStyleSheet(f"color: {theme.DANGER};")
+
+        task.progress.connect(on_progress)
+        task.finished.connect(on_finished)
+        task.failed.connect(on_failed)
+        self._pull_cancelled = cancelled
+        task.start()
+
+    def _cancel_pull(self) -> None:
+        task = getattr(self, "_pull_task", None)
+        if task is not None:
+            self._pull_cancelled["flag"] = True
+            task.cancel()
 
     # --- page 4: done ---
 

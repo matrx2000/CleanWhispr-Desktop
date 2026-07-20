@@ -1,9 +1,13 @@
-"""Best-effort local accelerator detection → Ollama model recommendation.
+"""Best-effort local accelerator detection → model recommendation.
 
-Used by the setup wizard to suggest an editing model that matches the
-machine (GPU memory / unified memory / plain RAM) instead of one that
-swamps it. All probes are cheap external commands or ctypes calls with
+Used by the setup wizard and editor settings to suggest an editing model that
+matches the machine (GPU memory / unified memory / plain RAM) instead of one
+that swamps it. All probes are cheap external commands or ctypes calls with
 short timeouts; call `detect()` from a worker thread.
+
+The recommendation is driven by a provider-supplied catalog of
+`InstallableModel`s (see llm.base), so it works for any LLM backend — not just
+Ollama — as long as the backend advertises models with memory metadata.
 """
 
 from __future__ import annotations
@@ -11,6 +15,8 @@ from __future__ import annotations
 import subprocess
 import sys
 from dataclasses import dataclass
+
+from cleanwispr.llm.base import InstallableModel
 
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -128,48 +134,75 @@ def detect() -> Hardware:
     return Hardware("cpu", "CPU (no supported GPU found)", None, _system_ram_gb())
 
 
-def recommended_ollama_model(hardware: Hardware) -> tuple[str, str]:
-    """Pick a Gemma size that fits the machine → (ollama tag, reason).
+# A big model can "fit" in system RAM yet crawl without a GPU, so on CPU-only
+# (and AMD, where Ollama's ROCm support is uneven) we cap what we'll recommend.
+_CPU_CEILING_GB = 6.0
+# "Smallest usable" targets a model at least this heavy — below it, editing
+# quality drops off — falling back to the absolute smallest only if nothing
+# bigger fits.
+_USABLE_FLOOR_GB = 5.0
+# When we can't measure memory at all, stay safe rather than assume plenty: a
+# small model always runs, a big one might swap or OOM.
+_UNKNOWN_BUDGET_GB = 3.0
 
-    Strong GPUs get Gemma 4 (12B/26B/31B — no smaller sizes exist);
-    modest hardware gets a small Gemma 3 so the machine stays responsive.
+
+def usable_memory_gb(hardware: Hardware) -> float | None:
+    """How much memory we can realistically give a model on this machine.
+
+    - NVIDIA: dedicated VRAM (models spilling to RAM run far slower).
+    - Apple: unified memory, discounted to leave the OS and apps headroom.
+    - AMD / CPU: RAM-bound *and* compute-bound — capped so we never suggest a
+      giant model that technically fits but runs at a crawl on the CPU.
     """
     if hardware.kind == "nvidia" and hardware.vram_gb:
-        # thresholds sit just under marketed sizes: a "24 GB" card reports
-        # ~23.99 GB, a "16 GB" card ~15.99, and must still hit its tier
-        vram = hardware.vram_gb
-        if vram >= 23:
-            return "gemma4:31b", f"fits your {vram:.0f} GB of GPU memory with room to spare"
-        if vram >= 15:
-            return "gemma4:26b", f"a strong fit for your {vram:.0f} GB of GPU memory"
-        if vram >= 9.5:
-            return "gemma4:12b", f"a great fit for your {vram:.0f} GB of GPU memory"
-        if vram >= 4.5:
-            return "gemma3:4b", (
-                f"sized for your {vram:.0f} GB of GPU memory — fast, no spill into RAM"
-            )
-        return "gemma3:1b", (
-            "small enough for your GPU memory; larger models would fall back to slow CPU"
+        return hardware.vram_gb
+    if hardware.kind == "apple" and hardware.ram_gb:
+        return hardware.ram_gb * 0.7
+    if hardware.ram_gb:  # amd + cpu
+        return min(hardware.ram_gb * 0.6, _CPU_CEILING_GB)
+    return None
+
+
+def _fit_reason(model: InstallableModel, hardware: Hardware, *, fits: bool) -> str:
+    if not fits:
+        return (
+            "the smallest option — bigger models would exceed this machine's "
+            "memory and fall back to slow processing"
         )
-    if hardware.kind == "apple":
-        ram = hardware.ram_gb or 8
-        if ram >= 64:
-            return "gemma4:31b", f"your {ram:.0f} GB of unified memory handles it comfortably"
-        if ram >= 48:
-            return "gemma4:26b", f"a strong fit for {ram:.0f} GB of unified memory (GPU via Metal)"
-        if ram >= 24:
-            return "gemma4:12b", f"a good fit for {ram:.0f} GB of unified memory (GPU via Metal)"
-        if ram >= 16:
-            return "gemma3:4b", (
-                f"leaves plenty of your {ram:.0f} GB of unified memory free for other apps"
-            )
-        return "gemma3:1b", "keeps memory pressure low on this Mac"
+    if hardware.kind == "nvidia" and hardware.vram_gb:
+        return f"fits your {hardware.vram_gb:.0f} GB of GPU memory"
+    if hardware.kind == "apple" and hardware.ram_gb:
+        return f"a good fit for {hardware.ram_gb:.0f} GB of unified memory (GPU via Metal)"
     if hardware.kind == "amd":
-        return "gemma3:4b", (
-            "Ollama uses AMD GPUs via ROCm where supported and falls back to "
-            "CPU otherwise — 4B stays responsive either way"
-        )
-    ram = hardware.ram_gb or 8
-    if ram >= 16:
-        return "gemma3:4b", "runs well on CPU with your amount of RAM"
-    return "gemma3:1b", "small enough to run on CPU without slowing your PC down"
+        return "responsive on AMD GPUs (ROCm) or CPU fallback"
+    if hardware.ram_gb:
+        return f"runs on CPU within your {hardware.ram_gb:.0f} GB of RAM"
+    return "a safe fit for this machine"
+
+
+def recommend_from_catalog(
+    catalog: list[InstallableModel], hardware: Hardware, prefer: str = "quality"
+) -> tuple[InstallableModel, str]:
+    """Pick a model from a provider catalog for this machine → (model, reason).
+
+    prefer="quality": the most capable model that fits (best output).
+    prefer="small":   the smallest model that still edits well (fastest, lightest).
+    Provider-agnostic: any backend whose catalog carries memory metadata works.
+    """
+    if not catalog:
+        raise ValueError("catalog is empty")
+    # recommend only from vetted defaults; the rest of the catalog is for search
+    pool = [m for m in catalog if m.recommended] or list(catalog)
+    budget = usable_memory_gb(hardware)
+    if budget is None:
+        budget = _UNKNOWN_BUDGET_GB
+    fitting = [m for m in pool if m.min_memory_gb <= budget]
+    if not fitting:
+        pick = min(pool, key=lambda m: m.min_memory_gb)
+        return pick, _fit_reason(pick, hardware, fits=False)
+    if prefer == "small":
+        usable = [m for m in fitting if m.min_memory_gb >= _USABLE_FLOOR_GB]
+        pick = min(usable or fitting, key=lambda m: m.min_memory_gb)
+    else:
+        pick = max(fitting, key=lambda m: m.min_memory_gb)
+    return pick, _fit_reason(pick, hardware, fits=True)

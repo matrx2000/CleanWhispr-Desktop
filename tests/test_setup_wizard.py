@@ -1,5 +1,16 @@
+import pytest
+
+from cleanwispr.llm import hardware
 from cleanwispr.storage.settings import Settings
 from cleanwispr.ui.setup_wizard import SetupWizard, _pretty_combo
+
+
+@pytest.fixture(autouse=True)
+def _stub_hardware(monkeypatch):
+    # the engine page kicks off hardware detection on show; keep it instant and
+    # deterministic instead of spawning real nvidia-smi/lspci probes on a thread
+    cpu = hardware.Hardware("cpu", "Test CPU", None, 16.0)
+    monkeypatch.setattr(hardware, "detect", lambda: cpu)
 
 
 def _make(qtbot, settings=None, on_change=None):

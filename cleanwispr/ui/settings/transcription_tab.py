@@ -24,13 +24,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from cleanwispr.llm import hardware
 from cleanwispr.storage import paths
 from cleanwispr.storage.settings import Settings
 from cleanwispr.stt import downloader, registry
 from cleanwispr.stt.languages import LANGUAGES
 from cleanwispr.ui import theme
-from cleanwispr.ui.tasks import DownloadTask
+from cleanwispr.ui.tasks import AsyncTask, DownloadTask
 from cleanwispr.ui.widgets import ModelRow, intro_label
+
+# which whisper-server build best matches each detected accelerator
+_RECOMMENDED_VARIANT: dict[str, str] = {
+    "nvidia": "cuda",
+    "amd": "vulkan",
+    "apple": "cpu",  # macOS build has Metal baked in
+    "cpu": "cpu",
+}
 
 
 class TranscriptionTab(QWidget):
@@ -39,6 +48,7 @@ class TranscriptionTab(QWidget):
         self._settings = settings
         self._on_change = on_change
         self._tasks: dict[str, DownloadTask] = {}  # keep refs while running
+        self._cancelled: set[str] = set()  # keys the user aborted mid-download
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -113,6 +123,11 @@ class TranscriptionTab(QWidget):
         layout = QVBoxLayout(group)
         layout.setSpacing(6)
 
+        self._hw_hint = QLabel("Checking your hardware for the best engine build…")
+        self._hw_hint.setWordWrap(True)
+        self._hw_hint.setStyleSheet(f"color: {theme.MUTED}; font-size: 11px;")
+        layout.addWidget(self._hw_hint)
+
         gpu_row = QHBoxLayout()
         gpu_row.addWidget(QLabel("Acceleration:"))
         self._gpu_combo = QComboBox()
@@ -138,10 +153,36 @@ class TranscriptionTab(QWidget):
             name, description = self._VARIANT_LABELS[variant]
             row = ModelRow(name, description, usable=False)
             row.download_clicked.connect(partial(self._download_engine, variant))
+            row.cancel_clicked.connect(partial(self._cancel_download, f"engine:{variant}"))
             layout.addWidget(row)
             self._engine_rows[variant] = row
             self._refresh_engine_row(variant)
+        self._detect_hardware()
         return group
+
+    def _detect_hardware(self) -> None:
+        """Detect the local accelerator (worker thread) and mark the matching
+        whisper build as recommended so the user knows which one to download."""
+        task = AsyncTask(hardware.detect)
+        self._hw_task = task  # keep a ref while it runs
+        task.done.connect(self._hardware_detected)
+        task.failed.connect(lambda _msg: self._hw_hint.setText(" "))
+        task.start()
+
+    def _hardware_detected(self, result: object) -> None:
+        if not isinstance(result, hardware.Hardware):
+            self._hw_hint.setText(" ")
+            return
+        variant = _RECOMMENDED_VARIANT.get(result.kind, "cpu")
+        if variant not in self._engine_rows:  # e.g. macOS: only the cpu build exists
+            variant = "cpu"
+        label = self._VARIANT_LABELS[variant][0]
+        self._hw_hint.setText(
+            f"Detected <b>{result.name}</b> — recommended build: <b>{label}</b>. "
+            "Download it below for the best speed; CPU always works as a fallback."
+        )
+        for name, row in self._engine_rows.items():
+            row.set_tag("Recommended" if name == variant else None)
 
     def _refresh_engine_row(self, variant: str) -> None:
         self._engine_rows[variant].set_state(registry.is_server_installed(variant))
@@ -177,6 +218,7 @@ class TranscriptionTab(QWidget):
             row.download_clicked.connect(partial(self._download_model, model.id))
             row.delete_clicked.connect(partial(self._delete_model, model.id))
             row.use_clicked.connect(partial(self._select_model, model.id))
+            row.cancel_clicked.connect(partial(self._cancel_download, f"model:{model.id}"))
             layout.addWidget(row)
             self._model_rows[model.id] = row
             self._refresh_model_row(model.id)
@@ -237,6 +279,7 @@ class TranscriptionTab(QWidget):
             row.download_clicked.connect(partial(self._download_parakeet, model.id))
             row.delete_clicked.connect(partial(self._delete_parakeet, model.id))
             row.use_clicked.connect(partial(self._select_parakeet, model.id))
+            row.cancel_clicked.connect(partial(self._cancel_download, f"parakeet:{model.id}"))
             layout.addWidget(row)
             self._parakeet_rows[model.id] = row
             self._refresh_parakeet_row(model.id)
@@ -388,8 +431,17 @@ class TranscriptionTab(QWidget):
 
     # --- shared task wiring ---
 
+    def _cancel_download(self, key: str) -> None:
+        """Abort the in-flight download for a row (its Cancel button, wired once
+        at row creation, routes here)."""
+        task = self._tasks.get(key)
+        if task is not None:
+            self._cancelled.add(key)
+            task.cancel()
+
     def _wire_task(self, task: DownloadTask, key: str, row: ModelRow) -> None:
         self._tasks[key] = task
+        self._cancelled.discard(key)
         row.set_busy(True)
 
         def cleanup() -> None:
@@ -397,8 +449,11 @@ class TranscriptionTab(QWidget):
             row.set_busy(False)
 
         def on_failed(msg: str) -> None:
+            was_cancelled = key in self._cancelled
+            self._cancelled.discard(key)
             cleanup()
-            QMessageBox.warning(self, "Download failed", msg)
+            if not was_cancelled:  # a user-initiated cancel isn't a failure to report
+                QMessageBox.warning(self, "Download failed", msg)
 
         task.progress.connect(row.set_progress)
         task.finished.connect(cleanup)

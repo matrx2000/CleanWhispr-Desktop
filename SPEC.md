@@ -112,7 +112,21 @@ cleanwispr/
 - `chat(messages, options)` → `POST /api/chat` with `options.num_ctx`, `temperature`, `keep_alive`, streaming
 - Configurable base URL (default `http://127.0.0.1:11434`)
 
-`OpenAICompatProvider` (planned) covers LM Studio, llama.cpp `llama-server`, vLLM, Jan — one implementation, many servers. Provider choice + per-provider settings live in the config schema from day one.
+**In-app model installation (provider-agnostic capability).** The contract also
+exposes an optional install capability so a non-technical user never touches a
+terminal: `supports_install`, `catalog()` (a searchable list of
+`InstallableModel`s spanning families — Gemma, Qwen, Llama, Mistral, Phi,
+DeepSeek… — each carrying `size_gb` + `min_memory_gb` + a `recommended` flag and
+a `matches(query)` search helper), `pull(model, progress, cancel)` (streaming
+download, cancellable — Ollama uses `POST /api/pull`), and `delete_model()`.
+Any model can also be installed by exact name. A shared, provider-neutral
+recommender
+(`hardware.recommend_from_catalog`) picks a **best-quality** or
+**smallest-usable** model for the detected accelerator (VRAM / unified memory /
+RAM budgeting, with a CPU cap). Providers without the capability set
+`supports_install = False` and the UI falls back to "install it in that tool".
+
+`OpenAICompatProvider` (planned) covers LM Studio, llama.cpp `llama-server`, vLLM, Jan — one implementation, many servers. Provider choice + per-provider settings live in the config schema from day one. Because install/recommendation lives in the contract (not in Ollama), any such provider that advertises a catalog gets the guided install + hardware recommendation UI for free.
 
 ### STT engine modularity
 
@@ -179,8 +193,8 @@ No secrets are stored (no API keys exist in a local-only app), so no keyring/enc
 Tabs (ordered by how a new user sets things up; the window is resizable down to
 small laptop screens and every tab scrolls):
 
-1. **Transcription** — engine picker (whisper/parakeet); card-style model manager (download/delete/use, ACTIVE badge, inline progress); engine-build manager (CPU/CUDA/Vulkan) with GPU backend selector; **model storage location** picker (any folder/disk, default = user cache dir); language dropdown; custom dictionary editor.
-2. **Voice Editor (LLM)** — provider selector (Ollama; extensible); **auto-detected list of installed Ollama models** with parameter size/quantization/context info from `/api/show`; context window (`num_ctx`), temperature, keep-alive; base URL; "Test connection" button; prompt preview/override (advanced).
+1. **Transcription** — engine picker (whisper/parakeet); card-style model manager (download/delete/use, ACTIVE badge, inline progress, **cancel**); engine-build manager (CPU/CUDA/Vulkan) with GPU backend selector and **GPU auto-detection** that marks the recommended build for the detected accelerator; **model storage location** picker (any folder/disk, default = user cache dir); language dropdown; custom dictionary editor.
+2. **Voice Editor (LLM)** — provider selector (Ollama; extensible); **auto-detected list of installed Ollama models** with parameter size/quantization/context info from `/api/show`; **hardware-aware recommendation** (Best-quality / Smallest-usable buttons) and a **searchable model library** (filter across families) installable in-app with progress + cancel (plus the paste-`ollama pull` box for installing anything by exact name); context window (`num_ctx`), temperature, keep-alive; base URL; "Test connection" / "Start Ollama" buttons; prompt preview/override (advanced).
 3. **Hotkeys** — key-capture widget per slot (dictation, editor), activation mode selector per slot, conflict validation between slots.
 4. **Microphone** — input device picker with live level meter; audio retention toggle + folder (clickable path) + purge.
 5. **History** — history-logging on/off toggle + the browser from §5.
@@ -193,7 +207,14 @@ folder in the system file manager after a confirmation prompt.
 **First-run setup wizard**: when the app starts with no existing config, a
 step-by-step guide (welcome → engine choice + download → language → optional
 Ollama setup → hotkey recap) gets a non-technical user to a working install.
-Skippable at any point; re-runnable from Settings → General.
+The engine step **detects the GPU** and, when a compatible accelerator is found,
+offers (pre-checked) to download the matching whisper build (CUDA/Vulkan) next
+to the CPU fallback, so users aren't left on slow CPU transcription unknowingly.
+The Ollama step is self-contained: it detects whether Ollama is installed and
+running (offering **Start Ollama** or an install link), recommends a right-sized
+model for the machine, and downloads the chosen one (Best-quality /
+Smallest-usable) in-place — no terminal, no manual `ollama pull`. Skippable at
+any point; re-runnable from Settings → General.
 
 ## 7. Tray & Overlay
 
