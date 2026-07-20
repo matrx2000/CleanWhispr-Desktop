@@ -108,6 +108,30 @@ class TranscriptionTab(QWidget):
         for model_id in self._parakeet_rows:
             self._refresh_parakeet_row(model_id)
 
+    def refresh(self) -> None:
+        """Re-read install state and settings from disk. The Settings window is
+        built once at startup, so this must run every time it's shown — otherwise
+        downloads/choices made elsewhere (e.g. the setup wizard) don't appear
+        and rows keep saying 'download' for things already installed."""
+        self._sync_combo(self._engine_combo, self._settings.stt.engine)
+        self._sync_combo(self._gpu_combo, self._settings.stt.gpu)
+        self._sync_combo(self._language_combo, self._settings.stt.language)
+        self._models_dir_edit.setText(str(paths.models_root()))
+        for variant in self._engine_rows:
+            self._refresh_engine_row(variant)
+        self._refresh_all_model_rows()
+        self._update_language_notice()
+
+    @staticmethod
+    def _sync_combo(combo: QComboBox, value: str) -> None:
+        """Point a combo at `value` without firing its change handler (which would
+        re-save settings and repaint)."""
+        combo.blockSignals(True)
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+
     # --- engine binaries (cpu / cuda / vulkan) ---
 
     _VARIANT_LABELS: ClassVar[dict[str, tuple[str, str]]] = {

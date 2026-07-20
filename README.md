@@ -249,6 +249,13 @@ selected text — never your history.
 
 **Fixed**
 
+- **Settings didn't reflect what the setup wizard just did**: the Settings
+  window is built once at startup, so after finishing the wizard the
+  Transcription tab still showed engine builds/models as "needs downloading"
+  (and edits made there could look ineffective). The window now **re-reads
+  install state and settings every time it's opened**, so wizard downloads and
+  choices appear immediately; the wizard also now persists the engine choice
+  even when nothing needed downloading
 - **In-app README viewer** (About → Open README) now renders readable
   light-text-on-dark instead of hard-to-read pink, and **scales screenshots to
   fit the window** (re-fitting on resize) instead of overflowing

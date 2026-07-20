@@ -161,7 +161,13 @@ class SetupWizard(QDialog):
     # --- navigation ---
 
     def _go(self, delta: int) -> None:
-        index = self._pages.currentIndex() + delta
+        current = self._pages.currentIndex()
+        # persist the engine choice when leaving the engine page forward, even if
+        # nothing was downloaded (everything already installed) — otherwise the
+        # radio selection is lost unless the user happened to click Download
+        if delta > 0 and current == 1:
+            self._apply_engine_choice()
+        index = current + delta
         if index >= self._pages.count():
             self._on_change()
             self.accept()

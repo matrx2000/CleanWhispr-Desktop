@@ -139,3 +139,46 @@ def test_transcription_tab_marks_recommended_gpu_build(qtbot):
     assert tab._engine_rows["cuda"]._tag_label.text() == "Recommended"
     assert not tab._engine_rows["cuda"]._tag_label.isHidden()  # shown
     assert tab._engine_rows["cpu"]._tag_label.text() == ""  # not the recommended one
+
+
+def test_transcription_refresh_picks_up_installs_made_after_construction(qtbot, monkeypatch):
+    """The Settings window is built once at startup; if the wizard downloads an
+    engine build + model afterwards, refresh() must surface it (the reported bug:
+    'still need to download cuda' after finishing the wizard)."""
+    import sys
+
+    if sys.platform == "darwin":
+        pytest.skip("macOS ships a single build; no cuda row")
+    from cleanwispr.stt import registry
+    from cleanwispr.ui.settings.transcription_tab import TranscriptionTab
+
+    monkeypatch.setattr(registry, "is_server_installed", lambda v: False)
+    monkeypatch.setattr(registry, "is_model_installed", lambda m: False)
+    settings = Settings()
+    tab = TranscriptionTab(settings, lambda: None)
+    qtbot.addWidget(tab)
+    assert tab._engine_rows["cuda"]._installed is False  # nothing installed at build time
+    assert tab._model_rows["base"]._installed is False
+
+    # simulate the wizard having downloaded the CUDA build + base model
+    monkeypatch.setattr(registry, "is_server_installed", lambda v: v == "cuda")
+    monkeypatch.setattr(registry, "is_model_installed", lambda m: m == "base")
+    tab.refresh()
+    assert tab._engine_rows["cuda"]._installed is True  # now shown as installed
+    assert tab._model_rows["base"]._installed is True
+
+
+def test_settings_window_refreshes_tabs_on_show(qtbot, monkeypatch, tmp_path):
+    from cleanwispr.storage.db import HistoryDb
+    from cleanwispr.ui.settings.window import SettingsWindow
+
+    db = HistoryDb(tmp_path / "history.db")
+    calls = []
+    window = SettingsWindow(Settings(), db, lambda: None, lambda: None)
+    qtbot.addWidget(window)
+    monkeypatch.setattr(window.transcription_tab, "refresh", lambda: calls.append("t"))
+    monkeypatch.setattr(window.editor_tab, "refresh", lambda: calls.append("e"))
+    window.show()
+    assert "t" in calls and "e" in calls
+    window.hide()
+    db.close()

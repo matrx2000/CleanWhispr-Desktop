@@ -345,6 +345,13 @@ class EditorTab(QWidget):
         layout.addWidget(self._model_details)
         return group
 
+    def refresh(self) -> None:
+        """Re-sync with settings and re-query installed models — the Settings
+        window is built once at startup, so this runs each time it's shown to
+        pick up a model the setup wizard (or anything else) just installed."""
+        self._url_edit.setText(self._settings.llm.ollama.base_url)
+        self._refresh_models()
+
     def _refresh_models(self) -> None:
         provider = self._ollama()
         self._run_async(provider.list_models, self._models_loaded, self._models_failed)

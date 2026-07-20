@@ -183,8 +183,10 @@ class SettingsWindow(QMainWindow):
         # ordered by how a new user sets things up: engine → editor → triggers → mic
         tabs = QTabWidget()
         # TranscriptionTab brings its own scroll area
-        tabs.addTab(TranscriptionTab(settings, on_settings_changed), "Transcription")
-        tabs.addTab(_scrollable(EditorTab(settings, on_settings_changed)), "Voice Editor")
+        self.transcription_tab = TranscriptionTab(settings, on_settings_changed)
+        tabs.addTab(self.transcription_tab, "Transcription")
+        self.editor_tab = EditorTab(settings, on_settings_changed)
+        tabs.addTab(_scrollable(self.editor_tab), "Voice Editor")
         tabs.addTab(
             _scrollable(HotkeysTab(settings, on_settings_changed, on_hotkeys_changed)),
             "Hotkeys",
@@ -391,6 +393,13 @@ class SettingsWindow(QMainWindow):
         self._readme_window.show()
         self._readme_window.raise_()
         self._readme_window.activateWindow()
+
+    def showEvent(self, event) -> None:  # Qt override, keeps Qt naming
+        # the window is built once at startup and reused; re-sync each time it's
+        # opened so downloads/choices made meanwhile (setup wizard, etc.) show up
+        super().showEvent(event)
+        self.transcription_tab.refresh()
+        self.editor_tab.refresh()
 
     def closeEvent(self, event) -> None:  # Qt override, keeps Qt naming
         # closing the window hides it; the app lives in the tray
