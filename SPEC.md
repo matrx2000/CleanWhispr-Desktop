@@ -8,6 +8,7 @@ A lightweight, fully local voice-to-text and voice-driven text-editing desktop a
 
 - **Dictation as a primary PC input method**: press a global hotkey anywhere, speak, and the transcribed text is typed/pasted at the cursor of the active application. Performance must match OpenWhispr (persistent local inference servers, no per-utterance model load).
 - **Voice editor**: a second, separate hotkey records a spoken *instruction*; a locally running LLM (Ollama first) applies that instruction to the selected text (add/remove/rewrite) and replaces it in place.
+- **Notes**: a built-in notetaking view (its own hotkey) — a WYSIWYG Markdown editor with multi-vault storage, image attachments, and the same local dictation/LLM engines driving voice input from an on-screen slider (no injection into a foreign app).
 - **100% local**: no accounts, no cloud APIs, no telemetry, no network calls except model downloads (HuggingFace/GitHub) and localhost inference servers.
 - **Modular by design**: STT engines and LLM providers sit behind small interfaces so new backends can be added without touching the app core.
 - **Cross-platform**: Windows 10/11 first-class; Linux (X11 first, Wayland desktops incrementally).
@@ -15,12 +16,12 @@ A lightweight, fully local voice-to-text and voice-driven text-editing desktop a
 ## 2. Non-Goals (explicitly out of scope)
 
 - Cloud transcription or cloud LLM providers, auth, accounts, usage quotas, referral/upgrade UI.
-- Notes system, meeting detection/transcription, speaker diarization, calendar integration, semantic/vector search, chat agent overlay.
+- Meeting detection/transcription, speaker diarization, calendar integration, semantic/vector search, chat agent overlay. (A local notetaking view — F3 — *is* in scope; the excluded items are the heavier "meeting assistant" features.)
 - Automatic "AI cleanup" of dictated text. Dictation output is the **raw transcript**. (LLM editing happens only when explicitly triggered via the editor hotkey.)
 - macOS as a first-class target (experimental support exists — injector, Metal engine build, `scripts/build_macos.py` — but it is untested and gets no dedicated effort).
 - JavaScript/Electron anything.
 
-## 3. The Two Core Features
+## 3. The Core Features
 
 ### F1 — Dictation (voice → text at cursor)
 
@@ -34,6 +35,7 @@ Flow: hotkey → capture mic audio (16 kHz mono PCM) → local STT engine → in
 - **Text injection**: write transcript to clipboard, simulate paste keystroke, optionally restore prior clipboard contents.
 - **Languages**: full Whisper set (58+ languages incl. `auto`), passed to the engine per-request. Parakeet models expose their own language sets (25 for `parakeet-tdt-0.6b-v3`).
 - **Custom dictionary**: user word/phrase list passed as Whisper `initial_prompt` to bias recognition.
+- **Transcript normalization**: engines return text split into timed segments joined by newlines that fall mid-sentence (whisper.cpp especially); a shared `stt.base.normalize_transcript` collapses whitespace runs so output is flowing prose, not stray line breaks. Applied by every engine before returning a result.
 
 ### F2 — Voice Editor (voice instruction → LLM edit of selected text)
 
@@ -43,6 +45,16 @@ Flow: user selects text in any app → editor hotkey → speaks an instruction (
 - **Prompting**: a hardened system prompt (adapted from OpenWhispr's `fullPrompt` in `src/locales/en/prompts.json` — instruction-following, output-only-the-result, prompt-injection resistant). The LLM must return *only* the edited text.
 - If no text is selected, the instruction is treated as a generation request ("write a short apology email") and the result is inserted at the cursor.
 - Streaming responses are consumed but injected once complete (v1); live preview is a later enhancement.
+
+### F3 — Notes (voice-driven notetaking view)
+
+A standalone window (own global hotkey, or tray → *Open Notes…*) that hides to the tray on close and never quits the app. It reuses the STT and LLM engines but **injects nothing** into other apps — results flow back into its own editor via controller signals (`notes_text_ready`, `notes_ai_ready`).
+
+- **Storage**: notes are **HTML files** (portable; hold colours and styled tables that Markdown can't). A *vault* is a folder of notes; a vault may contain *project* subfolders. Multiple vaults are configurable and switchable; legacy `.md` notes are read and migrate to `.html` on first save. Markdown import/export is available. Default vault: `<data_dir>/notes`.
+- **Editor** (`NoteEditor`, a `QTextEdit`): headings, bullet/numbered/checklist lists, inline code, custom text and highlight colours, and rich tables (insert/move/merge/split rows and columns, table properties). **Pasted or dropped images** are written to an `attachments/` folder beside the note and linked by relative path, so a note stays self-contained and a whole vault can be moved/synced/backed up as one folder.
+- **Voice input via a gated-shifter slider** (`SlideMicToggle`, ported from CleanWhispr-Flutter): drag the thumb **left** to dictate into the note at the cursor, **right** for an AI take, **up** to peek the raw Markdown, **down** to undo the last voice insert; tap to start/stop. The drag locks to one axis (never diagonal) with a live bubble naming the release action.
+- **AI-take modes** (`core.controller` session kinds `NOTES_DICTATION` / `NOTES_AI`): a selection → **edit only that range**; no selection → **generate and append** at the end (existing note never wiped). A `whole_note` prompt (`llm.prompts.build_whole_note_messages`, injection-hardened, returns the full revised note) also exists for operating on the entire note.
+- Notes dictation and AI takes are logged to the same history DB as F1/F2 (kinds `dictation` / `edit`).
 
 ## 4. Architecture
 
@@ -68,7 +80,7 @@ cleanwispr/
 │   ├── base.py             # LlmProvider interface: list_models(), model_info(), chat(messages, options)
 │   ├── ollama.py           # Ollama REST: /api/tags, /api/show, /api/chat (streaming)
 │   ├── openai_compat.py    # (later) generic OpenAI-compatible endpoint → LM Studio, llama.cpp, vLLM
-│   └── prompts.py          # editor system prompts
+│   └── prompts.py          # editor system prompts (edit / generate / whole_note)
 ├── hotkeys/
 │   ├── base.py             # HotkeyBackend interface: register(slot, combo, on_down, on_up)
 │   ├── pynput_backend.py   # Windows + Linux/X11 (low-level hooks; true key-down/key-up for hold mode)
@@ -80,7 +92,8 @@ cleanwispr/
 ├── ui/
 │   ├── tray.py             # QSystemTrayIcon: status, start/stop, settings, quit
 │   ├── overlay.py          # frameless translucent always-on-top pill showing rec/processing state
-│   ├── settings/           # settings window (see §6)
+│   ├── settings/           # settings window (see §6), incl. notes_tab.py (vault manager)
+│   ├── notes/              # Notes view (F3): window, editor, vault storage, table ops, slide-mic control
 │   └── history.py          # transcription history browser
 ├── storage/
 │   ├── db.py               # SQLite (stdlib sqlite3, WAL) — history
@@ -164,7 +177,8 @@ Location: `platformdirs` user config dir (`%LOCALAPPDATA%/CleanWispr/config.json
 {
   "hotkeys": {
     "dictation": { "combo": "ctrl+super", "mode": "toggle" },   // mode: toggle | hold
-    "editor":    { "combo": "alt+super", "mode": "toggle" }     // NOT ctrl+alt+<letter>: AltGr clash on EU layouts
+    "editor":    { "combo": "alt+super", "mode": "toggle" },    // NOT ctrl+alt+<letter>: AltGr clash on EU layouts
+    "notes":     { "combo": "f10", "mode": "toggle" }           // opens the Notes window (mode unused)
   },
   "stt": {
     "engine": "whisper",               // whisper | parakeet
@@ -182,7 +196,8 @@ Location: `platformdirs` user config dir (`%LOCALAPPDATA%/CleanWispr/config.json
   "audio": { "input_device": null, "keep_recordings": false },
   "inject": { "restore_clipboard": true },
   "history": { "enabled": true },      // off: nothing is written to history.db
-  "ui": { "overlay_position": "bottom-right", "start_on_login": false, "ui_language": "en", "sounds_enabled": true, "verbose_logging": false }
+  "ui": { "overlay_position": "bottom-right", "start_on_login": false, "ui_language": "en", "sounds_enabled": true, "verbose_logging": false },
+  "notes": { "vaults": [], "active_vault": "", "last_note": "", "notes_dir": "" }  // notes_dir: legacy single-folder, migrated into vaults on load
 }
 ```
 
@@ -195,11 +210,12 @@ small laptop screens and every tab scrolls):
 
 1. **Transcription** — engine picker (whisper/parakeet); card-style model manager (download/delete/use, ACTIVE badge, inline progress, **cancel**); engine-build manager (CPU/CUDA/Vulkan) with GPU backend selector and **GPU auto-detection** that marks the recommended build for the detected accelerator; **model storage location** picker (any folder/disk, default = user cache dir); language dropdown; custom dictionary editor.
 2. **Voice Editor (LLM)** — provider selector (Ollama; extensible); **auto-detected list of installed Ollama models** with parameter size/quantization/context info from `/api/show`; **hardware-aware recommendation** (Best-quality / Smallest-usable buttons) and a **searchable model library** (filter across families) installable in-app with progress + cancel (plus the paste-`ollama pull` box for installing anything by exact name); context window (`num_ctx`), temperature, keep-alive; base URL; "Test connection" / "Start Ollama" buttons; prompt preview/override (advanced).
-3. **Hotkeys** — key-capture widget per slot (dictation, editor), activation mode selector per slot, conflict validation between slots.
+3. **Hotkeys** — key-capture widget per slot (dictation, editor, notes), activation mode selector per slot (the notes slot just opens the window, so no mode), conflict validation across all slots in priority order (dictation > editor > notes).
 4. **Microphone** — input device picker with live level meter; audio retention toggle + folder (clickable path) + purge.
-5. **History** — history-logging on/off toggle + the browser from §5.
-6. **General** — sounds toggle, start-on-login, overlay position, verbose logging, open settings/log folder, clickable data paths, **Clear app data** (confirmed full factory reset: settings, history, logs, models, binaries — then quit).
-7. **About** — version, author, and every third-party project with verified links and licenses (incl. OpenWhispr MIT attribution).
+5. **Notes** — vault manager: add/remove vaults, mark the active one, reveal in file manager. Changing vaults live-reloads the open Notes window.
+6. **History** — history-logging on/off toggle + the browser from §5.
+7. **General** — sounds toggle, start-on-login, overlay position, verbose logging, open settings/log folder, clickable data paths, **Clear app data** (confirmed full factory reset: settings, history, logs, models, binaries — then quit).
+8. **About** — version, author, and every third-party project with verified links and licenses (incl. OpenWhispr MIT attribution).
 
 Folder paths shown anywhere in Settings are clickable links that open the
 folder in the system file manager after a confirmation prompt.
@@ -218,7 +234,7 @@ any point; re-runnable from Settings → General.
 
 ## 7. Tray & Overlay
 
-- **Tray** (`QSystemTrayIcon`): state-colored icon (idle/recording/processing/error), left-click toggles dictation, context menu: Start dictation, Start editor, Settings, History, Quit. App has no taskbar presence; closing the settings window minimizes to tray.
+- **Tray** (`QSystemTrayIcon`): state-colored icon (idle/recording/processing/error), left-click toggles dictation, context menu: Start dictation, Start editor, Open Notes, Settings, History, Quit. App has no taskbar presence; closing the settings window minimizes to tray.
 - **Overlay pill**: small frameless translucent always-on-top widget near a screen edge; shows recording (level-reactive), transcribing spinner, and brief result/error flashes; click stops/cancels; draggable; hidden when idle (configurable).
 
 ## 8. Platform Notes

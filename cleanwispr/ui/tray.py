@@ -35,6 +35,9 @@ class TrayManager:
         menu.addAction(self._editor_action)
 
         menu.addSeparator()
+        self._notes_action = QAction("Open Notes…")
+        menu.addAction(self._notes_action)
+
         settings_action = QAction("Settings…")
         if on_open_settings is not None:
             settings_action.triggered.connect(on_open_settings)
@@ -62,6 +65,9 @@ class TrayManager:
 
     def set_open_settings(self, callback) -> None:
         self._settings_action.triggered.connect(callback)
+
+    def set_open_notes(self, callback) -> None:
+        self._notes_action.triggered.connect(callback)
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         # left-click toggles dictation (context menu handles the rest)

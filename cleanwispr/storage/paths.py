@@ -63,6 +63,13 @@ def recordings_dir() -> Path:
     return path
 
 
+def default_notes_dir() -> Path:
+    """Default vault folder for the Notes view (settings.notes.notes_dir empty)."""
+    path = data_dir() / "notes"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def config_file() -> Path:
     return config_dir() / "config.json"
 

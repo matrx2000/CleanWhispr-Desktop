@@ -29,6 +29,7 @@ from cleanwispr.llm.base import LlmProviderError
 from cleanwispr.llm.prompts import (
     build_edit_messages,
     build_generate_messages,
+    build_whole_note_messages,
     clean_llm_output,
 )
 from cleanwispr.storage import paths
@@ -52,6 +53,14 @@ class AppState(StrEnum):
 class SessionKind(StrEnum):
     DICTATION = "dictation"
     EDIT = "edit"
+    NOTES_DICTATION = "notes_dictation"  # dictate into the Notes editor (no injection)
+    NOTES_AI = "notes_ai"  # AI take inside Notes: LLM edits the note (no injection)
+
+
+# AI-take context modes for the Notes view (mirrors the Flutter EditorPromptMode)
+NOTES_MODE_SELECTION = "selection"  # edit the highlighted range
+NOTES_MODE_WHOLE = "whole_note"  # operate on the entire note
+NOTES_MODE_GENERATE = "generate"  # empty note — create from the instruction
 
 
 @dataclass(slots=True)
@@ -80,6 +89,8 @@ class Controller(QObject):
     mic_ready = Signal()  # first audio frames arrived — the mic is really live
     level_changed = Signal(float)  # mic RMS while recording, for level UIs
     history_changed = Signal()
+    notes_text_ready = Signal(str)  # transcribed dictation → the Notes editor
+    notes_ai_ready = Signal(object)  # (result, mode) AI take → the Notes editor
 
     _outcome_ready = Signal(object)  # _PipelineOutcome, worker → main thread
     _stage_changed = Signal(AppState)  # mid-pipeline state updates from the worker
@@ -104,6 +115,9 @@ class Controller(QObject):
         self._state = AppState.IDLE
         self._session_kind: SessionKind | None = None
         self._press_started: float | None = None
+        # pending source/mode for a Notes AI take (set before recording starts)
+        self._notes_ai_source: str = ""
+        self._notes_ai_mode: str = NOTES_MODE_GENERATE
         self._outcome_ready.connect(self._on_outcome)
         self._stage_changed.connect(self._set_state)
         # abort takes where the mic never delivers audio (dead/slow BT endpoints)
@@ -162,6 +176,31 @@ class Controller(QObject):
         if self._state is AppState.IDLE:
             self._start_recording(SessionKind.EDIT)
         elif self._state is AppState.RECORDING:
+            self._finish_recording()
+
+    # --- Notes view entry points (driven by the in-window slider) ---
+
+    def toggle_notes_dictation(self) -> None:
+        """Slider left: dictate into the Notes editor (result via notes_text_ready)."""
+        if self._state is AppState.IDLE:
+            self._start_recording(SessionKind.NOTES_DICTATION)
+        elif self._state is AppState.RECORDING:
+            self._finish_recording()
+
+    def start_notes_ai(self, source_text: str, mode: str) -> None:
+        """Slider right: record an instruction, then have the LLM apply it to the
+        note. `mode` is one of NOTES_MODE_SELECTION / _WHOLE / _GENERATE; the
+        result comes back via notes_ai_ready as (result, mode)."""
+        if self._state is AppState.IDLE:
+            self._notes_ai_source = source_text or ""
+            self._notes_ai_mode = mode
+            self._start_recording(SessionKind.NOTES_AI)
+        elif self._state is AppState.RECORDING:
+            self._finish_recording()
+
+    def notes_finish(self) -> None:
+        """Stop an active Notes take (slider tap while recording)."""
+        if self._state is AppState.RECORDING:
             self._finish_recording()
 
     def cancel(self) -> None:
@@ -244,7 +283,11 @@ class Controller(QObject):
         self._set_state(AppState.TRANSCRIBING)
         settings_snapshot = self.settings.model_copy(deep=True)
         kind = self._session_kind or SessionKind.DICTATION
-        job = self._run_edit if kind is SessionKind.EDIT else self._run_dictation
+        job = {
+            SessionKind.EDIT: self._run_edit,
+            SessionKind.NOTES_DICTATION: self._run_notes,
+            SessionKind.NOTES_AI: self._run_notes_ai,
+        }.get(kind, self._run_dictation)
         self._executor.submit(self._guarded, job, pcm, settings_snapshot)
 
     def _guarded(self, job, pcm, settings: Settings) -> None:
@@ -372,6 +415,97 @@ class Controller(QObject):
         self.edit_status.emit("Pasting result…")
         self._inject_into_outcome(edited, settings, outcome)
         self._outcome_ready.emit(outcome)
+
+    def _run_notes(self, pcm, settings: Settings) -> None:
+        """Notes dictation: transcribe and hand the text to the Notes editor via
+        a signal — no injection into a foreign app."""
+        result = self._transcribe(pcm, settings)
+        if result is None:
+            return
+        if not result.text:
+            self._outcome_ready.emit(_PipelineOutcome(ok=False, message="Nothing transcribed"))
+            return
+        self.notes_text_ready.emit(result.text)
+        # log to history like any dictation take
+        self._outcome_ready.emit(
+            _PipelineOutcome(
+                ok=True,
+                kind=SessionKind.DICTATION,
+                text=result.text,
+                language=result.language,
+                engine=f"{settings.stt.engine}:{self._active_engine(settings)[1]}",
+                duration_ms=result.duration_ms,
+            )
+        )
+
+    def _run_notes_ai(self, pcm, settings: Settings) -> None:
+        """Notes AI take: the transcript is an instruction applied by the LLM to
+        the note's source text (selection / whole note / nothing → generate). The
+        result returns to the editor via notes_ai_ready — no injection."""
+        source = self._notes_ai_source
+        mode = self._notes_ai_mode
+        self.edit_status.emit("Transcribing your command…")
+        result = self._transcribe(pcm, settings)
+        if result is None:
+            return
+        instruction = result.text
+        if not instruction:
+            self._outcome_ready.emit(_PipelineOutcome(ok=False, message="No instruction heard"))
+            return
+        self.edit_status.emit(f"“{instruction}”")
+
+        self._stage_changed.emit(AppState.EDITING)
+        self.edit_thinking.emit(self._session_preamble(instruction, source or None))
+        options = llm_factory.chat_options(settings.llm)
+        try:
+            provider = llm_factory.create_provider(settings.llm)
+            if not provider.is_available():
+                self.edit_status.emit("Ollama isn't running — trying to start it…")
+                if not ollama_server.ensure_running(provider):
+                    self._outcome_ready.emit(
+                        _PipelineOutcome(
+                            ok=False,
+                            kind=SessionKind.EDIT,
+                            message="Ollama is not running and could not be started — "
+                            "install it from ollama.com or start it manually.",
+                        )
+                    )
+                    return
+            if mode == NOTES_MODE_WHOLE and source:
+                messages = build_whole_note_messages(instruction, source)
+            elif mode == NOTES_MODE_SELECTION and source:
+                messages = build_edit_messages(instruction, source)
+            else:
+                messages = build_generate_messages(instruction)
+            edited = clean_llm_output(self._stream_with_status(provider, messages, options))
+        except LlmProviderError as exc:
+            self._outcome_ready.emit(
+                _PipelineOutcome(ok=False, kind=SessionKind.EDIT, message=str(exc))
+            )
+            return
+
+        if not edited:
+            self._outcome_ready.emit(
+                _PipelineOutcome(
+                    ok=False, kind=SessionKind.EDIT, message="The model returned nothing"
+                )
+            )
+            return
+
+        self.notes_ai_ready.emit((edited, mode))
+        self._outcome_ready.emit(
+            _PipelineOutcome(
+                ok=True,
+                kind=SessionKind.EDIT,
+                text=edited,
+                language=result.language,
+                engine=f"{settings.stt.engine}:{self._active_engine(settings)[1]}",
+                llm_model=f"{settings.llm.provider}:{options.model}",
+                instruction=instruction,
+                source_text=source or None,
+                duration_ms=result.duration_ms,
+            )
+        )
 
     @staticmethod
     def _session_preamble(instruction: str, selection: str | None) -> str:

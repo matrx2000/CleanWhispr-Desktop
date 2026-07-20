@@ -13,7 +13,13 @@ from threading import Lock
 import numpy as np
 
 from cleanwispr.stt import registry
-from cleanwispr.stt.base import SAMPLE_RATE, SttEngine, SttError, TranscriptionResult
+from cleanwispr.stt.base import (
+    SAMPLE_RATE,
+    SttEngine,
+    SttError,
+    TranscriptionResult,
+    normalize_transcript,
+)
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +110,7 @@ class ParakeetEngine(SttEngine):
             stream = self._recognizer.create_stream()
             stream.accept_waveform(SAMPLE_RATE, floats)
             self._recognizer.decode_stream(stream)
-            text = stream.result.text.strip()
+            text = normalize_transcript(stream.result.text)
         return TranscriptionResult(
             text=text,
             language=language,

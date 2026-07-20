@@ -1,12 +1,14 @@
 # CleanWispr
 
-**Version 0.2.5** · Local voice-to-text and voice-driven text editing for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
+**Version 0.2.6** · Local voice-to-text, voice-driven text editing, and voice notetaking for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
 
 ## What it does
 
 **🎙 Dictation** — press a global hotkey in any application, speak, and the transcript is pasted at your cursor. Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) running locally as a warm background server, so transcription starts instantly.
 
 **✏ Voice editor** — select text anywhere, press the editor hotkey, and speak a command: *"make this formal"*, *"remove the second sentence"*, *"translate this to English"*. A local LLM (via [Ollama](https://ollama.com)) applies the edit and the result replaces your selection. With nothing selected, it writes new text from your command.
+
+**📝 Notes** — a built-in notetaking window (its own hotkey, or tray → *Open Notes…*) with a WYSIWYG Markdown editor: headings, lists, checklists, colours, tables, and paste-in images. Organise notes into **vaults** and folders, and use the on-screen slider to **dictate** into a note or run an **AI take** (rewrite the selection, or append generated text) — all still fully local.
 
 ## Screenshots
 
@@ -25,7 +27,8 @@
 | **Transcription** | Two engines: **whisper.cpp** (CPU / **CUDA** / Vulkan builds, Metal on macOS; 6 model sizes Tiny → Large-v3 + Turbo; 60+ languages; custom dictionary) and **NVIDIA Parakeet** via sherpa-onnx (in-process, extremely fast even on CPU; multilingual v3 with auto language detection). All models downloaded in-app with progress **and cancel**; the engine-build picker **auto-detects your GPU** and marks the recommended build (CUDA/Vulkan/CPU) |
 | **Voice editor** | Ollama model auto-discovery with parameter/quantization/context info; **hardware-aware model recommendations** (best-quality vs. smallest-usable for your GPU/RAM); **searchable model library** across families (Gemma, Qwen, Llama, Mistral, Phi, DeepSeek…) with **one-click install** — or install anything by name via `ollama pull …` (name-only extraction, nothing executed); auto-starts Ollama if it isn't running; hardened prompts (selection is data, output-only). The install/recommend flow is provider-agnostic — a future non-Ollama backend gets it for free |
 | **Live feedback** | Overlay pill narrates every stage: mic warm-up → recording (level-reactive) → transcribing → model loading (with seconds counter) → writing → pasting; **thinking panel** streams reasoning models' thoughts as markdown, with the exact command + selection that was sent; synthesized audio cues (toggleable) |
-| **Hotkeys** | Two global shortcuts (dictation / editor), click-to-capture UI, toggle or push-to-hold per slot, Esc cancels, overlap-conflict validation with clear explanations |
+| **Notes** | A standalone notetaking workspace with a WYSIWYG Markdown editor (headings, lists, checklists, inline code, custom text/highlight colours, full tables with row/column/merge/split ops) and **paste-or-drop images** saved as attachments beside the note. Multiple **vaults** (folders you can add, switch, sync, or back up as a unit) with project subfolders; notes stored as portable HTML with Markdown export. A gated-shifter **slider** drives voice input — slide left to **dictate** into the note, right for an **AI take** (edit the selection, or append generated text), up to peek raw Markdown, down to undo the last voice insert |
+| **Hotkeys** | Three global shortcuts (dictation / editor / notes), click-to-capture UI, toggle or push-to-hold per slot, Esc cancels, overlap-conflict validation across all slots with clear explanations |
 | **History** | Searchable local SQLite log of every dictation and edit (with instruction + original text for edits); entries are editable with an "edited" audit flag; confirmed clear-all; audio recordings NOT kept unless you opt in |
 | **Robustness** | Single-instance lock; inference servers die with the app (job object / PDEATHSIG) — no orphan processes; automatic engine fallback (CUDA → CPU); empty-mic and dead-mic guards with actionable messages |
 | **UI** | Material Design dark theme; every setting explained in plain language with tooltips; rotating file log with an opt-in verbose mode |
@@ -202,14 +205,47 @@ See [CLAUDE.md](CLAUDE.md) for architecture and contribution conventions, and
 Everything is stored locally under your user profile
 (`%LOCALAPPDATA%\CleanWispr` on Windows, `~/.local/share/cleanwispr` +
 `~/.cache/cleanwispr` on Linux): settings (`config.json`), history
-(`history.db`), logs, downloaded models and engine binaries. Models can
-optionally live anywhere — e.g. on another disk — via **Settings →
-Transcription → Model storage location**. **Settings → General → Clear app
+(`history.db`), logs, downloaded models and engine binaries, and the default
+notes vault (`notes/`). Models can optionally live anywhere — e.g. on another
+disk — via **Settings → Transcription → Model storage location**, and notes
+vaults can live in any folder you add from **Settings → Notes** (move, sync, or
+back one up as a unit). **Settings → General → Clear app
 data** deletes everything CleanWispr stored on your PC (a full factory reset /
 pre-uninstall cleanup). The AI model receives only your spoken command and the
 selected text — never your history.
 
 ## Changelog
+
+### 0.2.6
+
+**New**
+
+- **Notes — a built-in voice notetaking workspace**: a new window with its own
+  global hotkey (default **F10**, or tray → **Open Notes…**) built around a
+  WYSIWYG Markdown editor — headings, lists, checklists, inline code, custom
+  text/highlight colours, and full tables (insert/move/merge/split rows and
+  columns, properties). **Paste or drop images** straight into a note; they're
+  written to an `attachments/` folder beside the note, so a note stays
+  self-contained. Notes are saved as portable **HTML** with **Markdown export**
+- **Vaults**: organise notes into one or more **vaults** (folders you add,
+  switch between, and can sync or back up as a single unit) with optional
+  project subfolders. Manage them from the Notes window or **Settings → Notes**
+- **Voice input via a gated-shifter slider**: an on-screen mic thumb you drag
+  like a manual shifter — **left to dictate** into the note at the cursor,
+  **right for an AI take** (rewrite the selected text, or append generated text
+  when nothing is selected), **up** to peek the raw Markdown, **down** to undo
+  the last voice insert. Ported from the CleanWhispr-Flutter control
+
+**Changed**
+
+- **Dictation no longer inserts stray line breaks**: transcription engines
+  (whisper.cpp especially) return text split into timed segments joined by
+  newlines that land mid-sentence — inserted verbatim they became random line
+  breaks. Runs of whitespace are now collapsed so dictated and edited text reads
+  as one flowing paragraph; deliberate breaks come from you
+- **Hotkey conflict validation now spans all three shortcuts** (dictation, voice
+  editor, notes); a combo that overlaps a higher-priority one is disabled with a
+  clear explanation of which slot it clashed with
 
 ### 0.2.5
 

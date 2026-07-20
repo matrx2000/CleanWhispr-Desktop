@@ -22,7 +22,13 @@ import numpy as np
 
 from cleanwispr.storage import paths
 from cleanwispr.stt import procguard, registry
-from cleanwispr.stt.base import SAMPLE_RATE, SttEngine, SttError, TranscriptionResult
+from cleanwispr.stt.base import (
+    SAMPLE_RATE,
+    SttEngine,
+    SttError,
+    TranscriptionResult,
+    normalize_transcript,
+)
 
 log = logging.getLogger(__name__)
 
@@ -224,4 +230,4 @@ class WhisperCppEngine(SttEngine):
             raise SttError(f"Transcription request failed: {exc}") from exc
         if response.status_code != 200:
             raise SttError(f"whisper-server error {response.status_code}: {response.text[:200]}")
-        return (response.json().get("text") or "").strip()
+        return normalize_transcript(response.json().get("text") or "")

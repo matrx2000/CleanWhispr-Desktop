@@ -38,6 +38,9 @@ class HotkeySettings(BaseModel):
     # combos TYPE a character into the focused app (Croatian: Ctrl+Alt+E = €),
     # which destroys the very selection the editor is about to use
     editor: HotkeySlot = HotkeySlot(combo="alt+super")
+    # opens the Notes window; a bare function key stays clear of the AltGr trap
+    # above and of Windows-reserved Win+<letter> combos (Win+N, Win+E, …)
+    notes: HotkeySlot = HotkeySlot(combo="f10")
 
 
 class SttSettings(BaseModel):
@@ -85,6 +88,13 @@ class UiSettings(BaseModel):
     verbose_logging: bool = False  # console INFO + file DEBUG when enabled
 
 
+class NotesSettings(BaseModel):
+    vaults: list[str] = Field(default_factory=list)  # configured vault roots
+    active_vault: str = ""  # path of the vault currently open; empty = first/default
+    last_note: str = ""  # vault-relative path of the note to reopen on launch
+    notes_dir: str = ""  # legacy single-folder setting, migrated into `vaults` on load
+
+
 class Settings(BaseModel):
     hotkeys: HotkeySettings = HotkeySettings()
     stt: SttSettings = SttSettings()
@@ -93,6 +103,7 @@ class Settings(BaseModel):
     inject: InjectSettings = InjectSettings()
     history: HistorySettings = HistorySettings()
     ui: UiSettings = UiSettings()
+    notes: NotesSettings = NotesSettings()
 
 
 def load(path: Path | None = None) -> Settings:

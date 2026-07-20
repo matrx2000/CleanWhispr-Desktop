@@ -24,6 +24,7 @@ from cleanwispr.stt import registry
 from cleanwispr.stt.parakeet import ParakeetEngine
 from cleanwispr.stt.whisper_cpp import WhisperCppEngine
 from cleanwispr.ui import theme
+from cleanwispr.ui.notes.window import NotesWindow
 from cleanwispr.ui.overlay import OverlayPill
 from cleanwispr.ui.settings.window import SettingsWindow
 from cleanwispr.ui.sounds import SoundPlayer
@@ -39,6 +40,7 @@ class _HotkeyBridge(QObject):
     pressed = Signal(str)  # slot name
     released = Signal(str)
     cancel = Signal()
+    show_notes = Signal()  # notes hotkey — opens the Notes window (no recording)
 
 
 def _make_injector():
@@ -104,33 +106,43 @@ def main() -> int:
     tray = TrayManager(controller, on_open_settings=None)  # wired below
 
     def apply_hotkeys() -> None:
-        """(Re)register both slots from current settings — startup and live changes.
+        """(Re)register every slot from current settings — startup and live changes.
         Overlapping combos (one contained in the other) would both fire on the
-        larger chord, so the editor slot is disabled until the conflict is fixed."""
-        dictation = settings.hotkeys.dictation.combo
-        editor = settings.hotkeys.editor.combo
-        conflict = combos_overlap(dictation, editor)
+        larger chord, so a slot that overlaps one registered earlier is disabled
+        until the conflict is fixed. Dictation wins ties, then editor, then notes."""
+        combos = {
+            "dictation": settings.hotkeys.dictation.combo,
+            "editor": settings.hotkeys.editor.combo,
+            "notes": settings.hotkeys.notes.combo,
+        }
+        # notes only opens a window; the other two drive the recording bridge
+        press = {
+            "dictation": lambda: bridge.pressed.emit("dictation"),
+            "editor": lambda: bridge.pressed.emit("editor"),
+            "notes": bridge.show_notes.emit,
+        }
+        release = {
+            "dictation": lambda: bridge.released.emit("dictation"),
+            "editor": lambda: bridge.released.emit("editor"),
+            "notes": None,
+        }
         try:
-            hotkeys.register(
-                "dictation",
-                dictation,
-                on_press=lambda: bridge.pressed.emit("dictation"),
-                on_release=lambda: bridge.released.emit("dictation"),
-            )
-            if conflict:
-                hotkeys.unregister("editor")
-                tray.notify(
-                    f"Editor hotkey disabled: '{editor}' overlaps the dictation "
-                    f"hotkey '{dictation}' — both would trigger together. Pick a "
-                    f"different editor combo in Settings → Hotkeys."
-                )
-            else:
+            registered: list[tuple[str, str]] = []
+            for slot in ("dictation", "editor", "notes"):
+                combo = combos[slot]
+                clash = next((s for s, c in registered if combos_overlap(combo, c)), None)
+                if clash is not None:
+                    hotkeys.unregister(slot)
+                    tray.notify(
+                        f"{slot.capitalize()} hotkey disabled: '{combo}' overlaps the "
+                        f"{clash} hotkey '{dict(registered)[clash]}' — both would trigger "
+                        f"together. Pick a different combo in Settings → Hotkeys."
+                    )
+                    continue
                 hotkeys.register(
-                    "editor",
-                    editor,
-                    on_press=lambda: bridge.pressed.emit("editor"),
-                    on_release=lambda: bridge.released.emit("editor"),
+                    slot, combo, on_press=press[slot], on_release=release[slot]
                 )
+                registered.append((slot, combo))
         except HotkeyError as exc:
             log.error("hotkey setup failed: %s", exc)
             tray.notify(f"Hotkeys unavailable: {exc}")
@@ -184,6 +196,13 @@ def main() -> int:
     )
     controller.history_changed.connect(settings_window.history_tab.refresh)
     tray.set_open_settings(_show(settings_window))
+
+    notes_window = NotesWindow(settings, controller, on_settings_changed)
+    show_notes = _show(notes_window)
+    bridge.show_notes.connect(show_notes)
+    tray.set_open_notes(show_notes)
+    # re-open the vault when the folder is changed in Settings → Notes
+    settings_window.set_on_notes_dir_changed(notes_window.reload_vault)
 
     overlay = OverlayPill(controller, settings)  # noqa: F841 — kept alive for app lifetime
     thinking = ThinkingPanel(controller, settings)  # noqa: F841 — kept alive for app lifetime

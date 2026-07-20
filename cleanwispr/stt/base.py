@@ -7,12 +7,27 @@ latency is inference-only. Input audio is always 16 kHz mono int16 PCM.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 import numpy as np
 
 SAMPLE_RATE = 16_000
+
+_WHITESPACE_RUN = re.compile(r"\s+")
+
+
+def normalize_transcript(text: str) -> str:
+    """Collapse an engine's internal whitespace into flowing prose.
+
+    Engines return transcriptions split into timed segments joined by newlines
+    (whisper.cpp especially), which land at arbitrary mid-sentence points rather
+    than sentence boundaries. Inserted verbatim into a text editor those become
+    stray line breaks. Collapse every run of whitespace to a single space so
+    dictation reads as one paragraph; deliberate breaks come from the user.
+    """
+    return _WHITESPACE_RUN.sub(" ", text or "").strip()
 
 
 class SttError(RuntimeError):

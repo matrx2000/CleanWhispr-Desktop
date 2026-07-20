@@ -147,11 +147,12 @@ class HotkeysTab(QWidget):
         layout.addWidget(intro_label(
             "These shortcuts work globally, in any application. Dictation types what "
             "you say at the cursor; the voice editor rewrites your selected text from "
-            "a spoken command. Click a button, then press your desired keys. "
-            "Esc always cancels a recording in progress."
+            "a spoken command; Notes opens the notetaking window. Click a button, then "
+            "press your desired keys. Esc always cancels a recording in progress."
         ))
         layout.addWidget(self._slot_group("Dictation", "dictation"))
         layout.addWidget(self._slot_group("Voice editor", "editor"))
+        layout.addWidget(self._slot_group("Notes window", "notes", with_activation=False))
 
         hint = QLabel(
             "Toggle: press once to start, again to stop. Push-to-hold: record while "
@@ -165,7 +166,10 @@ class HotkeysTab(QWidget):
         layout.addWidget(hint)
         layout.addStretch()
 
-    def _slot_group(self, title: str, slot: str) -> QGroupBox:
+    # every configurable hotkey slot, in priority order (matches app.py)
+    _SLOTS = ("dictation", "editor", "notes")
+
+    def _slot_group(self, title: str, slot: str, with_activation: bool = True) -> QGroupBox:
         group = QGroupBox(title)
         grid = QGridLayout(group)
         slot_settings = getattr(self._settings.hotkeys, slot)
@@ -175,22 +179,26 @@ class HotkeysTab(QWidget):
         capture.combo_captured.connect(lambda combo: self._combo_changed(slot, capture, combo))
         grid.addWidget(capture, 0, 1)
 
-        grid.addWidget(QLabel("Activation:"), 1, 0)
-        mode_combo = QComboBox()
-        mode_combo.addItem("Toggle (tap to start/stop)", ActivationMode.TOGGLE.value)
-        mode_combo.addItem("Push-to-hold", ActivationMode.HOLD.value)
-        mode_combo.setCurrentIndex(0 if slot_settings.mode is ActivationMode.TOGGLE else 1)
-        mode_combo.currentIndexChanged.connect(
-            lambda _index: self._mode_changed(slot, mode_combo)
-        )
-        grid.addWidget(mode_combo, 1, 1)
+        if with_activation:
+            grid.addWidget(QLabel("Activation:"), 1, 0)
+            mode_combo = QComboBox()
+            mode_combo.addItem("Toggle (tap to start/stop)", ActivationMode.TOGGLE.value)
+            mode_combo.addItem("Push-to-hold", ActivationMode.HOLD.value)
+            mode_combo.setCurrentIndex(0 if slot_settings.mode is ActivationMode.TOGGLE else 1)
+            mode_combo.currentIndexChanged.connect(
+                lambda _index: self._mode_changed(slot, mode_combo)
+            )
+            grid.addWidget(mode_combo, 1, 1)
         grid.setColumnStretch(1, 1)
         return group
 
     def _combo_changed(self, slot: str, button: HotkeyCaptureButton, combo: str) -> None:
-        other_slot = "editor" if slot == "dictation" else "dictation"
-        other_combo = getattr(self._settings.hotkeys, other_slot).combo
-        if combos_overlap(combo, other_combo):
+        for other_slot in self._SLOTS:
+            if other_slot == slot:
+                continue
+            other_combo = getattr(self._settings.hotkeys, other_slot).combo
+            if not combos_overlap(combo, other_combo):
+                continue
             if combo == other_combo:
                 reason = f"'{combo}' is already used by the {other_slot} hotkey."
             else:

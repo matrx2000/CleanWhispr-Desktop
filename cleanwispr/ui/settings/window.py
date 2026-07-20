@@ -36,6 +36,7 @@ from cleanwispr.ui.settings.audio_tab import AudioTab
 from cleanwispr.ui.settings.editor_tab import EditorTab
 from cleanwispr.ui.settings.history_tab import HistoryTab
 from cleanwispr.ui.settings.hotkeys_tab import HotkeysTab
+from cleanwispr.ui.settings.notes_tab import NotesTab
 from cleanwispr.ui.settings.transcription_tab import TranscriptionTab
 from cleanwispr.ui.widgets import ACCENT_SOFT, LabeledToggle, PathLink
 
@@ -179,6 +180,7 @@ class SettingsWindow(QMainWindow):
         self._on_clear_app_data = on_clear_app_data
         self._on_run_setup = on_run_setup
         self._readme_window: _ReadmeWindow | None = None
+        self._notes_dir_changed_cb: Callable[[], None] | None = None
 
         # ordered by how a new user sets things up: engine → editor → triggers → mic
         tabs = QTabWidget()
@@ -192,6 +194,16 @@ class SettingsWindow(QMainWindow):
             "Hotkeys",
         )
         tabs.addTab(_scrollable(AudioTab(settings, on_settings_changed)), "Microphone")
+        tabs.addTab(
+            _scrollable(
+                NotesTab(
+                    settings,
+                    on_settings_changed,
+                    on_notes_dir_changed=self._fire_notes_dir_changed,
+                )
+            ),
+            "Notes",
+        )
         self.history_tab = HistoryTab(settings, db, on_settings_changed)
         tabs.addTab(self.history_tab, "History")
         tabs.addTab(
@@ -199,6 +211,15 @@ class SettingsWindow(QMainWindow):
         )
         tabs.addTab(_scrollable(self._about_tab()), "About")
         self.setCentralWidget(tabs)
+
+    def set_on_notes_dir_changed(self, callback: Callable[[], None]) -> None:
+        """Called when the user picks a new Notes vault folder (app.py wires the
+        Notes window's reload here)."""
+        self._notes_dir_changed_cb = callback
+
+    def _fire_notes_dir_changed(self) -> None:
+        if self._notes_dir_changed_cb is not None:
+            self._notes_dir_changed_cb()
 
     def _general_tab(self, settings: Settings, on_change: Callable[[], None]) -> QWidget:
         widget = QWidget()
