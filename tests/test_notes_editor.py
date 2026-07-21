@@ -84,6 +84,28 @@ def test_selection_to_markdown_empty_without_selection(qtbot, tmp_path):
     assert editor.selection_to_markdown() == ""
 
 
+def test_selection_images_returns_base64_png(qtbot, tmp_path):
+    import base64
+
+    editor = _editor(qtbot, tmp_path)
+    img = QImage(8, 8, QImage.Format.Format_RGB32)
+    img.fill(0x2244FF)
+    img.save(str(vault_mod.attachments_dir(tmp_path) / "pic.png"))
+    editor.set_document_dir(tmp_path)
+    editor.set_html('<p>see <img src="attachments/pic.png"> here</p>')
+    editor.selectAll()
+
+    images = editor.selection_images()
+    assert len(images) == 1
+    assert base64.b64decode(images[0])[:8] == b"\x89PNG\r\n\x1a\n"  # real PNG bytes
+
+
+def test_selection_images_empty_without_selection(qtbot, tmp_path):
+    editor = _editor(qtbot, tmp_path)
+    editor.setPlainText("no images here")
+    assert editor.selection_images() == []
+
+
 def test_image_link_renders_from_disk(qtbot, tmp_path):
     editor = _editor(qtbot, tmp_path)
     img = QImage(4, 4, QImage.Format.Format_RGB32)

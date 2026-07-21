@@ -155,6 +155,7 @@ class OllamaProvider(LlmProvider):
         self._base = base_url.rstrip("/")
         self._client = client or httpx.Client(timeout=_CHAT_TIMEOUT)
         self._thinking_cache: dict[str, bool] = {}
+        self._vision_cache: dict[str, bool] = {}
 
     def catalog(self) -> list[InstallableModel]:
         return list(_CATALOG)
@@ -290,16 +291,23 @@ class OllamaProvider(LlmProvider):
 
     def supports_thinking(self, model_id: str) -> bool:
         """Does the model expose reasoning tokens? (/api/show capabilities)."""
-        cached = self._thinking_cache.get(model_id)
+        return self._has_capability(model_id, "thinking", self._thinking_cache)
+
+    def supports_vision(self, model_id: str) -> bool:
+        """Can the model accept images? (/api/show capabilities → 'vision')."""
+        return self._has_capability(model_id, "vision", self._vision_cache)
+
+    def _has_capability(self, model_id: str, capability: str, cache: dict[str, bool]) -> bool:
+        cached = cache.get(model_id)
         if cached is not None:
             return cached
         try:
             response = self._client.post(self._url("/api/show"), json={"model": model_id})
             response.raise_for_status()
-            result = "thinking" in (response.json().get("capabilities") or [])
+            result = capability in (response.json().get("capabilities") or [])
         except httpx.HTTPError:
             result = False
-        self._thinking_cache[model_id] = result
+        cache[model_id] = result
         return result
 
     def chat(
@@ -312,9 +320,15 @@ class OllamaProvider(LlmProvider):
             raise LlmProviderError(
                 "No Ollama model selected — pick one in Settings → Editor (LLM)."
             )
+        wire_messages = []
+        for message in messages:
+            entry = {"role": message.role, "content": message.content}
+            if message.images:  # Ollama accepts base64 images per message (vision models)
+                entry["images"] = message.images
+            wire_messages.append(entry)
         payload = {
             "model": options.model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": wire_messages,
             "stream": True,
             "keep_alive": options.keep_alive,
             "options": {"num_ctx": options.num_ctx, "temperature": options.temperature},

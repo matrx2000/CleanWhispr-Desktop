@@ -10,9 +10,11 @@ note and linked by the relative path, so a note stays self-contained.
 
 from __future__ import annotations
 
+import base64
+import re
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QIODevice, QUrl
+from PySide6.QtCore import QBuffer, QIODevice, Qt, QUrl
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -119,6 +121,21 @@ class NoteEditor(QTextEdit):
         # markdown keeps tables; plain text is a clean fallback that still
         # avoids the raw selectedText() table noncharacters (U+FDD0/U+FDD1)
         return markdown or scratch.toPlainText().strip()
+
+    def selection_images(self, max_dim: int = 1024) -> list[str]:
+        """Base64-encoded PNGs for the images inside the current selection, for a
+        vision model. Empty when there is no selection or no images. Large images
+        are downscaled so the request stays reasonable."""
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            return []
+        names = re.findall(r'<img\b[^>]*\bsrc="([^"]+)"', cursor.selection().toHtml())
+        out: list[str] = []
+        for name in names:
+            image = self.loadResource(QTextDocument.ResourceType.ImageResource, QUrl(name))
+            if isinstance(image, QImage) and not image.isNull():
+                out.append(_encode_image_base64(image, max_dim))
+        return out
 
     # --- image paste / drop ------------------------------------------------
 
@@ -313,6 +330,18 @@ def _encode_png(image: QImage) -> bytes:
     buffer.open(QIODevice.OpenModeFlag.WriteOnly)
     image.save(buffer, "PNG")
     return bytes(buffer.data())
+
+
+def _encode_image_base64(image: QImage, max_dim: int) -> str:
+    """PNG → base64 for a vision LLM, downscaling to `max_dim` on the long edge."""
+    if max_dim and (image.width() > max_dim or image.height() > max_dim):
+        image = image.scaled(
+            max_dim,
+            max_dim,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+    return base64.b64encode(_encode_png(image)).decode("ascii")
 
 
 def _read_bytes(path: str) -> bytes:

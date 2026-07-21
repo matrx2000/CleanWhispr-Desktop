@@ -259,6 +259,50 @@ def test_chat_skips_think_flag_for_non_thinking_models():
     assert chunks == ["ok"]
 
 
+def test_supports_vision_from_capabilities():
+    calls = []
+
+    def handler(request):
+        assert request.url.path == "/api/show"
+        calls.append(1)
+        return httpx.Response(200, json={"capabilities": ["completion", "vision"]})
+
+    provider = make_provider(handler)
+    assert provider.supports_vision("llava:7b") is True
+    assert provider.supports_vision("llava:7b") is True  # cached — no second request
+    assert len(calls) == 1
+
+
+def test_supports_vision_false_for_text_model():
+    provider = make_provider(
+        lambda request: httpx.Response(200, json={"capabilities": ["completion"]})
+    )
+    assert provider.supports_vision("gemma3:4b") is False
+
+
+def test_chat_sends_images_on_message():
+    def handler(request):
+        payload = json.loads(request.content)
+        assert payload["messages"][-1]["images"] == ["QkFTRTY0"]  # base64 forwarded verbatim
+        line = json.dumps({"message": {"content": "a cat"}, "done": True})
+        return httpx.Response(200, content=line.encode())
+
+    provider = make_provider(handler)
+    messages = [ChatMessage("user", "what is this?", images=["QkFTRTY0"])]
+    assert list(provider.chat(messages, ChatOptions(model="llava:7b"))) == ["a cat"]
+
+
+def test_chat_omits_images_key_when_absent():
+    def handler(request):
+        payload = json.loads(request.content)
+        assert "images" not in payload["messages"][0]  # text-only message stays clean
+        line = json.dumps({"message": {"content": "ok"}, "done": True})
+        return httpx.Response(200, content=line.encode())
+
+    provider = make_provider(handler)
+    list(provider.chat([ChatMessage("user", "hi")], ChatOptions(model="x")))
+
+
 def test_chat_without_model_raises():
     provider = make_provider(lambda request: httpx.Response(200))
     with pytest.raises(LlmProviderError, match="No Ollama model selected"):

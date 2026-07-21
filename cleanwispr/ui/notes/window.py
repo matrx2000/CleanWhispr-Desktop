@@ -683,6 +683,7 @@ class NotesWindow(QMainWindow):
     def _slide_ai(self) -> None:
         self._ensure_note()
         cursor = self._editor.textCursor()
+        images: list[str] = []
         if cursor.hasSelection():
             # edit exactly the selected text \u2014 this is the only mode that replaces
             # existing content, and only within the selection (select-all to
@@ -691,13 +692,15 @@ class NotesWindow(QMainWindow):
             # serialise the selection to Markdown so a selected TABLE reaches the
             # LLM as a real pipe table, not selectedText()'s U+FDD0-separated cells
             source = self._editor.selection_to_markdown()
+            # any pictures in the selection go to the model too (vision models only)
+            images = self._editor.selection_images()
             self._ai_selection = (cursor.selectionStart(), cursor.selectionEnd())
         else:
             # no selection: generate and INSERT at the cursor \u2014 never wipe the note
             mode = NOTES_MODE_GENERATE
             source = ""
             self._ai_selection = None
-        self._controller.start_notes_ai(source, mode)
+        self._controller.start_notes_ai(source, mode, images)
 
     def _slide_tap(self) -> None:
         if self._controller.state is AppState.RECORDING:

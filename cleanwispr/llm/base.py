@@ -56,6 +56,7 @@ PullProgressFn = Callable[[int, int], None]
 class ChatMessage:
     role: str  # "system" | "user" | "assistant"
     content: str
+    images: list[str] | None = None  # base64-encoded images (vision models only)
 
 
 @dataclass(slots=True)
@@ -99,6 +100,11 @@ class LlmProvider(ABC):
         """Stream response text chunks. Callers join them; injection happens once
         complete. For reasoning models, thinking tokens stream to on_thinking
         instead of the result (providers without the concept ignore it)."""
+
+    def supports_vision(self, model_id: str) -> bool:
+        """Can this model accept images (multimodal)? Providers that can't tell
+        return False so callers fall back to text-only."""
+        return False
 
     def is_model_loaded(self, model_id: str) -> bool | None:
         """Is the model resident in memory right now? None = provider can't tell."""

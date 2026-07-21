@@ -126,6 +126,7 @@ class Controller(QObject):
         # pending source/mode for a Notes AI take (set before recording starts)
         self._notes_ai_source: str = ""
         self._notes_ai_mode: str = NOTES_MODE_GENERATE
+        self._notes_ai_images: list[str] = []  # base64 images from the selection (vision)
         self._outcome_ready.connect(self._on_outcome)
         self._stage_changed.connect(self._set_state)
         # abort takes where the mic never delivers audio (dead/slow BT endpoints)
@@ -195,13 +196,17 @@ class Controller(QObject):
         elif self._state is AppState.RECORDING:
             self._finish_recording()
 
-    def start_notes_ai(self, source_text: str, mode: str) -> None:
+    def start_notes_ai(
+        self, source_text: str, mode: str, images: list[str] | None = None
+    ) -> None:
         """Slider right: record an instruction, then have the LLM apply it to the
         note. `mode` is one of NOTES_MODE_SELECTION / _WHOLE / _GENERATE; the
-        result comes back via notes_ai_ready as (result, mode)."""
+        result comes back via notes_ai_ready as (result, mode). `images` are
+        base64-encoded pictures in the selection, sent only to vision models."""
         if self._state is AppState.IDLE:
             self._notes_ai_source = source_text or ""
             self._notes_ai_mode = mode
+            self._notes_ai_images = images or []
             self._start_recording(SessionKind.NOTES_AI)
         elif self._state is AppState.RECORDING:
             self._finish_recording()
@@ -329,6 +334,27 @@ class Controller(QObject):
         except Exception as exc:
             log.exception("paste failed")
             outcome.message = f"Paste failed ({exc}) — text is on the clipboard"
+
+    def _attach_notes_images(self, messages, provider, model: str) -> None:
+        """Attach the selection's images to the user message — but only if the
+        model advertises vision. Otherwise skip them and say why."""
+        if not self._notes_ai_images:
+            return
+        try:
+            has_vision = provider.supports_vision(model)
+        except Exception:
+            log.exception("vision capability check failed")
+            has_vision = False
+        if not has_vision:
+            self.notice.emit(
+                f"{len(self._notes_ai_images)} selected image(s) skipped — "
+                f"{model} has no vision support"
+            )
+            return
+        for message in messages:
+            if message.role == "user":
+                message.images = list(self._notes_ai_images)
+                break
 
     def _apply_skill_overrides(self, options, scope: str) -> None:
         """Let the active skills pin temperature/model (last active wins). No-op
@@ -516,6 +542,7 @@ class Controller(QObject):
                 messages = build_edit_messages(instruction, source, active_skills)
             else:
                 messages = build_generate_messages(instruction, active_skills)
+            self._attach_notes_images(messages, provider, options.model)
             edited = clean_llm_output(self._stream_with_status(provider, messages, options))
         except LlmProviderError as exc:
             self._outcome_ready.emit(
