@@ -280,6 +280,46 @@ def test_supports_vision_false_for_text_model():
     assert provider.supports_vision("gemma3:4b") is False
 
 
+def test_supports_vision_capabilities_are_authoritative():
+    # a populated capabilities list without vision is definitive — a stray
+    # model_info key must NOT flip it to True (that would 500 on a text model)
+    provider = make_provider(
+        lambda request: httpx.Response(
+            200,
+            json={"capabilities": ["completion"], "model_info": {"gemma3.vision.foo": 1}},
+        )
+    )
+    assert provider.supports_vision("gemma3:1b") is False
+
+
+def test_supports_vision_via_model_info_when_capabilities_missing():
+    # older Ollama: no "capabilities" field, but the GGUF carries a .vision. KV
+    provider = make_provider(
+        lambda request: httpx.Response(200, json={"model_info": {"clip.vision.image_size": 336}})
+    )
+    assert provider.supports_vision("moondream") is True
+
+
+def test_supports_vision_via_clip_family_when_capabilities_missing():
+    provider = make_provider(
+        lambda request: httpx.Response(200, json={"details": {"families": ["llama", "clip"]}})
+    )
+    assert provider.supports_vision("llava:7b") is True
+
+
+def test_chat_maps_image_500_to_friendly_error():
+    def handler(request):
+        return httpx.Response(
+            500, content=b"Failed to process inputs: this model is missing data "
+            b"required for image input"
+        )
+
+    provider = make_provider(handler)
+    messages = [ChatMessage("user", "describe", images=["QkFTRTY0"])]
+    with pytest.raises(LlmProviderError, match="without image support"):
+        list(provider.chat(messages, ChatOptions(model="gemma3:1b")))
+
+
 def test_chat_sends_images_on_message():
     def handler(request):
         payload = json.loads(request.content)

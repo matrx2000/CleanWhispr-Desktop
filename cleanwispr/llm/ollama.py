@@ -118,6 +118,12 @@ _CATALOG: tuple[InstallableModel, ...] = (
     ),
 )
 
+# Vision detection. On Ollama >= 0.6.4 the /api/show `capabilities` array is
+# authoritative; these are pre-0.6.4 fallbacks used only when it's absent/empty,
+# mirroring how Ollama itself derives the "vision" capability from the GGUF.
+_VISION_MODEL_INFO_MARKER = ".vision."  # e.g. clip.vision.block_count, gemma3.vision.*
+_VISION_ARCH_FAMILIES = frozenset({"clip", "mllama"})
+
 _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-:/]*$")
 _COMMAND_RE = re.compile(r"^(?:ollama\s+(?P<verb>pull|run)\s+)?(?P<model>\S+)\s*$", re.IGNORECASE)
 
@@ -237,6 +243,9 @@ class OllamaProvider(LlmProvider):
 
     def load_model(self, model_id: str, keep_alive: str = "10m") -> None:
         """An empty chat request makes Ollama load the model and return when done."""
+        # re-detect vision against the warm model — capabilities can misreport
+        # for ~30s during a cold start (ollama #12950/#13459)
+        self._vision_cache.pop(model_id, None)
         try:
             response = self._client.post(
                 self._url("/api/chat"),
@@ -293,10 +302,6 @@ class OllamaProvider(LlmProvider):
         """Does the model expose reasoning tokens? (/api/show capabilities)."""
         return self._has_capability(model_id, "thinking", self._thinking_cache)
 
-    def supports_vision(self, model_id: str) -> bool:
-        """Can the model accept images? (/api/show capabilities → 'vision')."""
-        return self._has_capability(model_id, "vision", self._vision_cache)
-
     def _has_capability(self, model_id: str, capability: str, cache: dict[str, bool]) -> bool:
         cached = cache.get(model_id)
         if cached is not None:
@@ -309,6 +314,64 @@ class OllamaProvider(LlmProvider):
             result = False
         cache[model_id] = result
         return result
+
+    def supports_vision(self, model_id: str) -> bool:
+        """Can this model accept images via /api/chat `images`?
+
+        Deliberately low false-positive: sending images to a text-only Ollama
+        model is a hard HTTP 500 ('this model is missing data required for image
+        input'), not a silent no-op, so we return True only when the *pulled blob*
+        actually carries a vision projector. Signals, most-authoritative first:
+          1. capabilities[] contains "vision" or "image"  (Ollama >= 0.6.4)
+          2. any model_info key with '.vision.'            (old-server fallback)
+          3. details.family(-ies): 'clip' or 'mllama'      (old-server fallback)
+        """
+        cached = self._vision_cache.get(model_id)
+        if cached is not None:
+            return cached
+        result = self._detect_vision(model_id)
+        self._vision_cache[model_id] = result
+        return result
+
+    def _detect_vision(self, model_id: str) -> bool:
+        try:
+            response = self._client.post(
+                self._url("/api/show"), json={"model": model_id, "verbose": True}
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("vision-detect %s: /api/show failed (%s)", model_id, exc)
+            return False
+
+        caps = payload.get("capabilities") or []
+        details = payload.get("details") or {}
+        model_info = payload.get("model_info") or {}
+
+        if "vision" in caps or "image" in caps:  # authoritative on Ollama >= 0.6.4
+            log.info("vision-detect %s: True (capabilities=%s)", model_id, caps)
+            return True
+        # a populated capabilities list without vision/image is definitive — do NOT
+        # override with heuristics (that is exactly what triggers the runner 500)
+        if caps:
+            log.info("vision-detect %s: False (capabilities=%s)", model_id, caps)
+            return False
+
+        # pre-0.6.4 fallbacks (no capabilities field at all)
+        if any(_VISION_MODEL_INFO_MARKER in key for key in model_info):
+            log.info("vision-detect %s: True (model_info .vision. key)", model_id)
+            return True
+        families = {*(details.get("families") or []), details.get("family")}
+        if families & _VISION_ARCH_FAMILIES:
+            log.info("vision-detect %s: True (family=%s)", model_id, families)
+            return True
+
+        log.info(
+            "vision-detect %s: False (no capabilities; family=%s) — run "
+            "'ollama show %s' to confirm",
+            model_id, details.get("family"), model_id,
+        )
+        return False
 
     def chat(
         self,
@@ -339,6 +402,14 @@ class OllamaProvider(LlmProvider):
             with self._client.stream("POST", self._url("/api/chat"), json=payload) as response:
                 if response.status_code != 200:
                     body = response.read().decode(errors="replace")[:300]
+                    if response.status_code == 500 and (
+                        "image input" in body or "missing data required for image" in body
+                    ):
+                        raise LlmProviderError(
+                            f"{options.model} was pulled without image support — it can't "
+                            "read images. Use a vision model (e.g. gemma3:4b, llava, "
+                            "llama3.2-vision) for image edits."
+                        )
                     raise LlmProviderError(f"Ollama error {response.status_code}: {body}")
                 for line in response.iter_lines():
                     if not line.strip():

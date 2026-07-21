@@ -345,12 +345,15 @@ class Controller(QObject):
         except Exception:
             log.exception("vision capability check failed")
             has_vision = False
+        count = len(self._notes_ai_images)
         if not has_vision:
+            log.info("skipping %d image(s): %s reports no vision support", count, model)
             self.notice.emit(
-                f"{len(self._notes_ai_images)} selected image(s) skipped — "
-                f"{model} has no vision support"
+                f"{count} image(s) skipped — {model} can't read images "
+                "(try gemma3:4b or llava)"
             )
             return
+        log.info("attaching %d image(s) to %s", count, model)
         for message in messages:
             if message.role == "user":
                 message.images = list(self._notes_ai_images)

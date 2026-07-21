@@ -60,5 +60,5 @@ def test_images_skipped_for_text_only_model(qtbot, db, monkeypatch):
     messages, _ = provider.calls[0]
     user = next(m for m in messages if m.role == "user")
     assert user.images is None  # not sent to a text-only model
-    assert any("vision" in n for n in notices)  # and the user is told why
+    assert any("skipped" in n for n in notices)  # and the user is told why
     c.shutdown()
