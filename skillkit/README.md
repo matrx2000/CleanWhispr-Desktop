@@ -80,7 +80,17 @@ The **library** also holds library-wide state (persisted alongside the skills):
    ```python
    from skillkit import SkillLibrary, JsonSkillStore, default_skills
    library = SkillLibrary(JsonSkillStore("skills.json"), seed=default_skills())
+
+   # ...or ship it on, with some skills pre-activated (first run only — later
+   # runs always honour the persisted state, so user choices are never lost):
+   library = SkillLibrary(
+       JsonSkillStore("skills.json"), seed=default_skills(),
+       seed_active=["markdown-tables"], seed_enabled=True,
+   )
    ```
+
+   `default_skills()` ships Formal, Concise, Friendly, Poet, and a **Tables**
+   formatting helper (teaches correct GitHub-flavoured Markdown pipe tables).
 
 2. **Compose prompts** with the active skills wherever you build LLM messages:
 
@@ -275,6 +285,7 @@ while the voice stays yours.
 | `SkillStore`, `JsonSkillStore`, `MemorySkillStore` | persistence |
 | `PromptSpec`, `compose_messages`, `build_persona_block`, `DEFAULT_TRAILER` | prompt layering |
 | `voice.parse_switch`, `voice.match_skill`, `SwitchVerdict` | voice control |
+| `parse_import`, `SkillLibrary.export_dict` / `import_skills` | exchange skills as JSON |
 | `SCOPE_EDITOR`, `SCOPE_NOTES`, `SCOPE_BOTH` | scope constants |
 | `skillkit.qt.SkillsBridge / SkillPalette / SkillsManager` | optional PySide6 UI |
 
@@ -282,7 +293,18 @@ Key `SkillLibrary` methods: `set_enabled`, `enabled`, `all`, `enabled_skills`,
 `active_skills(scope=None)`, `activate` / `deactivate` / `toggle` / `replace_active` /
 `set_active` / `clear_active`, `add` / `create` / `update` / `duplicate` / `remove` /
 `set_skill_enabled`, `resolved_temperature(scope)` / `resolved_model(scope)`,
-`apply_verdict(verdict)`, `subscribe(callback)`.
+`apply_verdict(verdict)`, `export_dict(ids=None)` / `import_skills(data)`,
+`subscribe(callback)`.
+
+### Exchange skills as JSON
+
+```python
+bundle = library.export_dict(["poet"])          # or export_dict() for all
+Path("poet.json").write_text(json.dumps(bundle))
+
+added = library.import_skills(json.loads(text))  # bundle, list, or single dict
+# imported skills are always editable and get fresh unique ids — no clobbering
+```
 
 ---
 

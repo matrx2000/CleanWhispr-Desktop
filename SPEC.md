@@ -56,6 +56,17 @@ A standalone window (own global hotkey, or tray → *Open Notes…*) that hides 
 - **AI-take modes** (`core.controller` session kinds `NOTES_DICTATION` / `NOTES_AI`): a selection → **edit only that range**; no selection → **generate and append** at the end (existing note never wiped). A `whole_note` prompt (`llm.prompts.build_whole_note_messages`, injection-hardened, returns the full revised note) also exists for operating on the entire note.
 - Notes dictation and AI takes are logged to the same history DB as F1/F2 (kinds `dictation` / `edit`).
 
+### F4 — Skills (reusable LLM roles / personas)
+
+A modular layer between the UI and the LLM that flavours the voice editor (F2) and Notes AI (F3) with a reusable *role* — "a formal editor", "a witty poet", or a **Tables** formatter. Implemented as a **standalone, portable package** `skillkit/` (repo root, sibling to `cleanwispr/`) so the whole persona layer can be reused in other LLM apps; CleanWispr wires it in through a thin adapter.
+
+- **Data model** (`skillkit.Skill`): `id`, `name`, `description`, `body` (the persona instruction — untrusted, tone/formatting only), `enabled`, `builtin`, `scope` (`editor` / `notes` / `both`), voice `triggers`, and optional per-skill `temperature` / `model` overrides. A `SkillLibrary` holds the skills, a master on/off, and a **stackable** ordered active set; it persists through a `SkillStore` seam (default `JsonSkillStore` → `<config_dir>/skills.json`, atomic writes, corrupt→`.bak`), **not** inside `config.json`, so the whole feature travels as one portable file.
+- **Prompt layering** (`skillkit.compose`): active personas are woven into the F2/F3 base prompts as a scoped `<style>` block using a *guardrail sandwich* — the app's output contract is stated after the persona and restated in a user-message trailer, and DATA is wrapped in **per-request nonce fences** with the close marker scrubbed from both data and persona. A persona can shape tone/formatting but cannot override the output rules or be hijacked by document text. With no active skill the prompt is byte-identical to F2/F3 without skills.
+- **Voice switching** (`skillkit.voice`, voice editor only): a short utterance matching a switch grammar arms/clears skills instead of running an edit — `"switch to <name>"` (replace), `"use"/"activate <name>"` (add — stackable), `"deactivate <name>"` (remove), `"plain"`/`"stop"`/`"clear"` (clear all). The spoken name is fuzzy-matched (stdlib `difflib`) against each skill's name + triggers with an accept-floor and runner-up margin; a weak/tied match is rejected, never guessed. **No extra LLM call.** Anything not matching the grammar flows through as a normal instruction.
+- **UI** (`skillkit.qt`, PySide6-only): a `SkillsManager` (add/edit/duplicate/delete, triggers, scope, per-skill temperature+model, **Test skill**, list-width slider, **JSON import/export** to exchange skills) embedded in Settings → Skills; a `SkillPalette` "/" quick-switcher; and a tray **Skills** submenu (checkable per skill). A `SkillsBridge` re-emits library changes as a Qt signal so voice and UI stay in sync (changes may originate off the UI thread).
+- **Built-ins**, seeded on first run only: Formal, Concise, Friendly, Poet, and **Tables** (teaches GitHub-flavoured Markdown pipe-table syntax so tables render correctly in Notes via Qt's `setMarkdown`). The feature ships **enabled with Tables active** by default; the master switch off makes it a pure no-op.
+- **Controller wiring**: `core.controller._run_edit` runs the voice switch, then resolves `active_skills("editor")`; `_run_notes_ai` resolves `active_skills("notes")` (no voice switch). Both apply per-skill temperature/model overrides. The controller imports only the pure `skillkit` core — never the Qt UI, preserving the seam discipline.
+
 ## 4. Architecture
 
 Single Python process + PySide6 event loop; heavy work (audio capture, inference calls, DB writes) on worker threads (`QThread`/`concurrent.futures`) so the UI and hotkey handling never block. Local inference servers run as managed child processes.
@@ -101,6 +112,15 @@ cleanwispr/
 │   └── paths.py            # cache/config/data dir resolution (platformdirs)
 └── resources/              # icons, bundled binary manifests
 ```
+
+> **Skills (F4)** live in a **separate top-level package `skillkit/`** (sibling to
+> `cleanwispr/`): a stdlib-only core (`models`, `library`, `store`, `compose`,
+> `voice`) plus an optional PySide6 UI (`skillkit/qt/`). It has **no dependency on
+> `cleanwispr`**, so it is portable to other LLM apps; `cleanwispr` depends on it
+> through a thin adapter — `llm/prompts.py` (composer), `core/controller.py`
+> (voice switch + skill resolution), `ui/settings/skills_tab.py` (embeds the
+> manager), `ui/tray.py` (submenu), and `app.py` (store/library/bridge/palette
+> wiring). See `skillkit/README.md` for the public API and integration guide.
 
 ### Key design decisions (and what they inherit from OpenWhispr)
 
@@ -203,6 +223,8 @@ Location: `platformdirs` user config dir (`%LOCALAPPDATA%/CleanWispr/config.json
 
 No secrets are stored (no API keys exist in a local-only app), so no keyring/encryption layer is needed.
 
+**Skills store (F4).** The skills library persists **separately** in `<config_dir>/skills.json` — `{ "version", "config": { "enabled", "active_ids", "voice_switching", "accept_threshold", "margin", "max_words" }, "items": [ Skill… ] }` — deliberately *not* inside `config.json`, so the portable `skillkit` package owns its own storage (via a `SkillStore` seam) and a user's skills move/back up as a single file. Same atomic-write + corrupt→`.bak` safety as `config.json`.
+
 ## 6. Settings UI (PySide6 window)
 
 Tabs (ordered by how a new user sets things up; the window is resizable down to
@@ -210,12 +232,13 @@ small laptop screens and every tab scrolls):
 
 1. **Transcription** — engine picker (whisper/parakeet); card-style model manager (download/delete/use, ACTIVE badge, inline progress, **cancel**); engine-build manager (CPU/CUDA/Vulkan) with GPU backend selector and **GPU auto-detection** that marks the recommended build for the detected accelerator; **model storage location** picker (any folder/disk, default = user cache dir); language dropdown; custom dictionary editor.
 2. **Voice Editor (LLM)** — provider selector (Ollama; extensible); **auto-detected list of installed Ollama models** with parameter size/quantization/context info from `/api/show`; **hardware-aware recommendation** (Best-quality / Smallest-usable buttons) and a **searchable model library** (filter across families) installable in-app with progress + cancel (plus the paste-`ollama pull` box for installing anything by exact name); context window (`num_ctx`), temperature, keep-alive; base URL; "Test connection" / "Start Ollama" buttons; prompt preview/override (advanced).
-3. **Hotkeys** — key-capture widget per slot (dictation, editor, notes), activation mode selector per slot (the notes slot just opens the window, so no mode), conflict validation across all slots in priority order (dictation > editor > notes).
-4. **Microphone** — input device picker with live level meter; audio retention toggle + folder (clickable path) + purge.
-5. **Notes** — vault manager: add/remove vaults, mark the active one, reveal in file manager. Changing vaults live-reloads the open Notes window.
-6. **History** — history-logging on/off toggle + the browser from §5.
-7. **General** — sounds toggle, start-on-login, overlay position, verbose logging, open settings/log folder, clickable data paths, **Clear app data** (confirmed full factory reset: settings, history, logs, models, binaries — then quit).
-8. **About** — version, author, and every third-party project with verified links and licenses (incl. OpenWhispr MIT attribution).
+3. **Skills** — reusable LLM roles (F4): master **Enable skills** + **Allow voice switching** toggles; a list with add / duplicate / delete and a **width slider** (for long names); an editor for name, description, persona body, voice triggers, scope (voice editor / Notes / both), per-skill temperature + model override, and enable/activate; a **Test skill** button (runs a sample through the model to preview the persona); and **import/export** skills as JSON to exchange them. Built-in skills (Formal / Concise / Friendly / Poet / **Tables**) are read-only — duplicate to edit. Backed by the standalone `skillkit` manager widget.
+4. **Hotkeys** — key-capture widget per slot (dictation, editor, notes), activation mode selector per slot (the notes slot just opens the window, so no mode), conflict validation across all slots in priority order (dictation > editor > notes).
+5. **Microphone** — input device picker with live level meter; audio retention toggle + folder (clickable path) + purge.
+6. **Notes** — vault manager: add/remove vaults, mark the active one, reveal in file manager. Changing vaults live-reloads the open Notes window.
+7. **History** — history-logging on/off toggle + the browser from §5.
+8. **General** — sounds toggle, start-on-login, overlay position, verbose logging, open settings/log folder, clickable data paths, **Clear app data** (confirmed full factory reset: settings, history, logs, models, binaries — then quit).
+9. **About** — version, author, and every third-party project with verified links and licenses (incl. OpenWhispr MIT attribution).
 
 Folder paths shown anywhere in Settings are clickable links that open the
 folder in the system file manager after a confirmation prompt.
@@ -234,7 +257,7 @@ any point; re-runnable from Settings → General.
 
 ## 7. Tray & Overlay
 
-- **Tray** (`QSystemTrayIcon`): state-colored icon (idle/recording/processing/error), left-click toggles dictation, context menu: Start dictation, Start editor, Open Notes, Settings, History, Quit. App has no taskbar presence; closing the settings window minimizes to tray.
+- **Tray** (`QSystemTrayIcon`): state-colored icon (idle/recording/processing/error), left-click toggles dictation, context menu: Start dictation, Start editor, **Skills** (submenu: enable + a checkable entry per skill + quick-switch/manage), Open Notes, Settings, History, Quit. App has no taskbar presence; closing the settings window minimizes to tray.
 - **Overlay pill**: small frameless translucent always-on-top widget near a screen edge; shows recording (level-reactive), transcribing spinner, and brief result/error flashes; click stops/cancels; draggable; hidden when idle (configurable).
 
 ## 8. Platform Notes

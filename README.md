@@ -10,6 +10,8 @@
 
 **📝 Notes** — a built-in notetaking window (its own hotkey, or tray → *Open Notes…*) with a WYSIWYG Markdown editor: headings, lists, checklists, colours, tables, and paste-in images. Organise notes into **vaults** and folders, and use the on-screen slider to **dictate** into a note or run an **AI take** (rewrite the selection, or append generated text) — all still fully local.
 
+**🎭 Skills** — reusable *roles* for the voice editor and Notes AI: *"a formal editor"*, *"a witty poet"*, or the built-in **Tables** helper that keeps Markdown tables rendering cleanly. Activate one or several (they **stack**), switch hands-free by voice (*"switch to poet"*, *"plain"* to clear) or from the tray, and manage them in **Settings → Skills** — add, edit, set voice triggers, per-skill temperature/model, and **import/export as JSON** to share. A skill only shapes tone and formatting; the app keeps control of the output, so a persona can't break the paste-only result.
+
 ## Screenshots
 
 | Model manager (Settings → Transcription) | History browser |
@@ -28,6 +30,7 @@
 | **Voice editor** | Ollama model auto-discovery with parameter/quantization/context info; **hardware-aware model recommendations** (best-quality vs. smallest-usable for your GPU/RAM); **searchable model library** across families (Gemma, Qwen, Llama, Mistral, Phi, DeepSeek…) with **one-click install** — or install anything by name via `ollama pull …` (name-only extraction, nothing executed); auto-starts Ollama if it isn't running; hardened prompts (selection is data, output-only). The install/recommend flow is provider-agnostic — a future non-Ollama backend gets it for free |
 | **Live feedback** | Overlay pill narrates every stage: mic warm-up → recording (level-reactive) → transcribing → model loading (with seconds counter) → writing → pasting; **thinking panel** streams reasoning models' thoughts as markdown, with the exact command + selection that was sent; synthesized audio cues (toggleable) |
 | **Notes** | A standalone notetaking workspace with a WYSIWYG Markdown editor (headings, lists, checklists, inline code, custom text/highlight colours, full tables with row/column/merge/split ops) and **paste-or-drop images** saved as attachments beside the note. Multiple **vaults** (folders you can add, switch, sync, or back up as a unit) with project subfolders; notes stored as portable HTML with Markdown export. A gated-shifter **slider** drives voice input — slide left to **dictate** into the note, right for an **AI take** (edit the selection, or append generated text), up to peek raw Markdown, down to undo the last voice insert |
+| **Skills** | Reusable personas/roles layered onto the voice editor and Notes AI as a tone-and-formatting *style* — **injection-hardened** so a user-written persona can't break the output contract (nonce-fenced data, guardrail sandwich). **Stackable** (several active at once), with per-skill temperature/model overrides and **voice switching** (*"switch to poet"*, *"use the concise skill"*, *"plain"* to clear). Ships built-in skills including a **Tables** formatter that keeps Markdown tables rendering correctly in Notes (on by default); manage them via a "/" quick-switch palette, a tray submenu, and a **Settings → Skills** editor with **JSON import/export** to share skills. Built as a standalone, reusable `skillkit` package |
 | **Hotkeys** | Three global shortcuts (dictation / editor / notes), click-to-capture UI, toggle or push-to-hold per slot, Esc cancels, overlap-conflict validation across all slots with clear explanations |
 | **History** | Searchable local SQLite log of every dictation and edit (with instruction + original text for edits); entries are editable with an "edited" audit flag; confirmed clear-all; audio recordings NOT kept unless you opt in |
 | **Robustness** | Single-instance lock; inference servers die with the app (job object / PDEATHSIG) — no orphan processes; automatic engine fallback (CUDA → CPU); empty-mic and dead-mic guards with actionable messages |
@@ -204,9 +207,9 @@ See [CLAUDE.md](CLAUDE.md) for architecture and contribution conventions, and
 
 Everything is stored locally under your user profile
 (`%LOCALAPPDATA%\CleanWispr` on Windows, `~/.local/share/cleanwispr` +
-`~/.cache/cleanwispr` on Linux): settings (`config.json`), history
-(`history.db`), logs, downloaded models and engine binaries, and the default
-notes vault (`notes/`). Models can optionally live anywhere — e.g. on another
+`~/.cache/cleanwispr` on Linux): settings (`config.json`), skills
+(`skills.json`), history (`history.db`), logs, downloaded models and engine
+binaries, and the default notes vault (`notes/`). Models can optionally live anywhere — e.g. on another
 disk — via **Settings → Transcription → Model storage location**, and notes
 vaults can live in any folder you add from **Settings → Notes** (move, sync, or
 back one up as a unit). **Settings → General → Clear app
@@ -215,6 +218,35 @@ pre-uninstall cleanup). The AI model receives only your spoken command and the
 selected text — never your history.
 
 ## Changelog
+
+### 0.2.7
+
+**New**
+
+- **Skills — reusable roles for the voice editor and Notes AI**: named personas
+  (*"a formal editor"*, *"a witty poet"*) that shape the **tone and formatting**
+  of the local LLM's output without ever overriding the app's output rules. The
+  persona is layered in as a scoped *style* using a guardrail sandwich and
+  per-request nonce data-fences, so a skill can flavour the result but can't
+  break the paste-only contract or be hijacked by the document text.
+  **Stackable** (activate several at once), with optional per-skill temperature
+  and model overrides.
+- **Switch skills by voice** (voice editor): *"switch to poet"*, *"use the
+  concise skill"*, *"deactivate poet"*, or *"plain"* / *"stop"* to clear — parsed
+  deterministically (no extra LLM call) with fuzzy matching against each skill's
+  name and **voice triggers** (seed known mishears like `poyet`). A short
+  command switches; anything else is treated as a normal instruction.
+- **Manage skills in Settings → Skills**: add, edit, duplicate, delete,
+  enable/activate, set voice triggers and scope (voice editor / Notes / both),
+  **Test skill** against your model, and a width slider for long names. Plus a
+  **"/" quick-switch palette** and a **tray → Skills** submenu (no extra global
+  hotkey).
+- **Import / export skills as JSON** so people can exchange them.
+- **Built-in Tables skill** (on by default): tells the model how to write
+  GitHub-flavoured Markdown pipe tables so they render correctly in Notes.
+- Implemented as a **standalone, reusable `skillkit` package** (stdlib core +
+  optional PySide6 UI, its own `skills.json` store) — droppable into other LLM
+  apps; see `skillkit/README.md`.
 
 ### 0.2.6
 
