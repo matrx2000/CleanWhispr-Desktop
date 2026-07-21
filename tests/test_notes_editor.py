@@ -61,6 +61,29 @@ def test_image_paste_saves_attachment_and_links_it(qtbot, tmp_path):
     assert "attachments/" in editor.to_html()
 
 
+def test_selection_to_markdown_table_has_no_noncharacters(qtbot, tmp_path):
+    # regression: a selected table used to reach the LLM as selectedText()'s
+    # U+FDD0/U+FDD1 cell separators; it must now serialise to a real pipe table
+    editor = _editor(qtbot, tmp_path)
+    editor.set_markdown("| Name | Score |\n| --- | --- |\n| Xylos | 8 |\n| Aetheria | 6 |\n")
+    editor.selectAll()
+
+    md = editor.selection_to_markdown()
+
+    assert chr(0xFDD0) not in md and chr(0xFDD1) not in md  # no Qt cell noncharacters
+    assert "|" in md and "---" in md  # a real Markdown pipe table
+    assert "Xylos" in md and "Aetheria" in md
+    # and it re-renders back into a table (round-trips through setMarkdown)
+    editor.set_markdown(md)
+    assert editor.document().toPlainText().count("Xylos") == 1
+
+
+def test_selection_to_markdown_empty_without_selection(qtbot, tmp_path):
+    editor = _editor(qtbot, tmp_path)
+    editor.setPlainText("hello")
+    assert editor.selection_to_markdown() == ""
+
+
 def test_image_link_renders_from_disk(qtbot, tmp_path):
     editor = _editor(qtbot, tmp_path)
     img = QImage(4, 4, QImage.Format.Format_RGB32)

@@ -688,8 +688,9 @@ class NotesWindow(QMainWindow):
             # existing content, and only within the selection (select-all to
             # transform the whole note on purpose)
             mode = NOTES_MODE_SELECTION
-            # selectedText() uses U+2029 as its line separator; normalise it
-            source = cursor.selectedText().replace("\u2029", "\n")
+            # serialise the selection to Markdown so a selected TABLE reaches the
+            # LLM as a real pipe table, not selectedText()'s U+FDD0-separated cells
+            source = self._editor.selection_to_markdown()
             self._ai_selection = (cursor.selectionStart(), cursor.selectionEnd())
         else:
             # no selection: generate and INSERT at the cursor \u2014 never wipe the note

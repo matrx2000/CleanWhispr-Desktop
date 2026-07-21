@@ -102,6 +102,24 @@ class NoteEditor(QTextEdit):
     def to_markdown(self) -> str:
         return self.document().toMarkdown(_MARKDOWN_FEATURES)
 
+    def selection_to_markdown(self) -> str:
+        """Serialise the current selection to GitHub Markdown.
+
+        Crucial for AI edits of a selected *table*: ``QTextCursor.selectedText()``
+        encodes table cells with Qt's internal noncharacters (U+FDD0 between
+        cells, U+FDD1 at the table end), which are meaningless to the LLM. Going
+        via the fragment's HTML → Markdown yields a real pipe table instead.
+        """
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            return ""
+        scratch = QTextDocument()
+        scratch.setHtml(cursor.selection().toHtml())
+        markdown = scratch.toMarkdown(_MARKDOWN_FEATURES).strip()
+        # markdown keeps tables; plain text is a clean fallback that still
+        # avoids the raw selectedText() table noncharacters (U+FDD0/U+FDD1)
+        return markdown or scratch.toPlainText().strip()
+
     # --- image paste / drop ------------------------------------------------
 
     def canInsertFromMimeData(self, source) -> bool:  # Qt override
