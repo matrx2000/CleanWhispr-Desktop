@@ -12,13 +12,16 @@ config file. Standard Qt widgets only, so it inherits the host's theme.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
+from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -26,8 +29,11 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -126,26 +132,67 @@ class SkillsManager(QWidget):
 
     def _list_panel(self) -> QWidget:
         panel = QWidget()
+        self._list_col = panel
         panel.setFixedWidth(210)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
         self._list = QListWidget()
+        self._list.setTextElideMode(Qt.TextElideMode.ElideRight)  # long names show "…"
         self._list.currentItemChanged.connect(self._on_selection_changed)
         layout.addWidget(self._list, 1)
 
+        # width slider — widen the column when a skill's name is long
+        width_row = QHBoxLayout()
+        width_row.setContentsMargins(0, 0, 0, 0)
+        width_row.setSpacing(6)
+        width_label = QLabel("Width")
+        width_label.setStyleSheet("font-size: 11px;")
+        width_row.addWidget(width_label)
+        self._width_slider = QSlider(Qt.Orientation.Horizontal)
+        self._width_slider.setRange(160, 460)
+        self._width_slider.setValue(210)
+        self._width_slider.setToolTip("Widen the skill list to fit long names")
+        self._width_slider.valueChanged.connect(panel.setFixedWidth)
+        width_row.addWidget(self._width_slider, 1)
+        layout.addLayout(width_row)
+
+        # compact, equal-width buttons so three fit the narrow column on any theme
         buttons = QHBoxLayout()
-        add = QPushButton("Add")
-        add.clicked.connect(self._add)
-        buttons.addWidget(add)
-        self._dup_button = QPushButton("Duplicate")
-        self._dup_button.clicked.connect(self._duplicate)
+        buttons.setContentsMargins(0, 6, 0, 0)
+        buttons.setSpacing(4)
+        buttons.addWidget(self._compact_button("Add", self._add))
+        self._dup_button = self._compact_button("Copy", self._duplicate, tip="Duplicate")
         buttons.addWidget(self._dup_button)
-        self._del_button = QPushButton("Delete")
-        self._del_button.clicked.connect(self._delete)
+        self._del_button = self._compact_button("Delete", self._delete)
         buttons.addWidget(self._del_button)
         layout.addLayout(buttons)
+
+        # import / export so skills can be exchanged as JSON files
+        io_row = QHBoxLayout()
+        io_row.setContentsMargins(0, 0, 0, 0)
+        io_row.setSpacing(4)
+        io_row.addWidget(
+            self._compact_button("Import", self._import, tip="Add skills from a JSON file")
+        )
+        io_row.addWidget(
+            self._compact_button(
+                "Export", self._export, tip="Save the selected skill (or all) to JSON"
+            )
+        )
+        layout.addLayout(io_row)
         return panel
+
+    @staticmethod
+    def _compact_button(text: str, slot, *, tip: str | None = None) -> QPushButton:
+        button = QPushButton(text)
+        button.setStyleSheet("padding: 4px 8px; min-width: 0px;")
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        button.clicked.connect(slot)
+        if tip:
+            button.setToolTip(tip)
+        return button
 
     def _reload_list(self) -> None:
         selected = self._current.id if self._current else None
@@ -400,6 +447,39 @@ class SkillsManager(QWidget):
             if item.data(Qt.ItemDataRole.UserRole) == skill_id:
                 self._list.setCurrentRow(row)
                 break
+
+    # --- import / export (exchange skills as JSON) ---
+
+    def _export(self) -> None:
+        self._commit()  # include any unsaved edits to the selected skill
+        ids = [self._current.id] if self._current else None
+        data = self._library.export_dict(ids)
+        default = f"{self._current.id}.json" if self._current else "skills.json"
+        path, _ = QFileDialog.getSaveFileName(self, "Export skill", default, "JSON (*.json)")
+        if not path:
+            return
+        try:
+            Path(path).write_text(
+                json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError as exc:
+            QMessageBox.warning(self, "Export failed", f"Could not write the file:\n{exc}")
+
+    def _import(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Import skills", "", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Import failed", f"Could not read the file:\n{exc}")
+            return
+        added = self._library.import_skills(data)
+        if not added:
+            QMessageBox.information(self, "Nothing imported", "No skills found in that file.")
+            return
+        self._select_id(added[0].id)
+        QMessageBox.information(self, "Imported", "Added: " + ", ".join(s.name for s in added))
 
     def _test(self) -> None:
         if self._on_test is None or self._current is None:

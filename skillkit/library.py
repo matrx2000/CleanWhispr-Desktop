@@ -23,6 +23,27 @@ log = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 
 
+def parse_import(data: object) -> list[Skill]:
+    """Tolerantly extract Skills from an export bundle (``{"skills": [...]}``), a
+    bare list of skill dicts, or a single skill dict. Unusable records are skipped
+    and imported skills are marked editable (never built-in)."""
+    if isinstance(data, dict) and ("skills" in data or "items" in data):
+        records = data.get("skills") or data.get("items") or []
+    elif isinstance(data, list):
+        records = data
+    elif isinstance(data, dict):
+        records = [data]
+    else:
+        records = []
+    out: list[Skill] = []
+    for record in records:
+        skill = Skill.from_dict(record)
+        if skill is not None:
+            skill.builtin = False
+            out.append(skill)
+    return out
+
+
 @dataclass
 class LibraryConfig:
     """Library-wide state (everything that isn't an individual skill)."""
@@ -54,10 +75,14 @@ class SkillLibrary:
         *,
         autosave: bool = True,
         seed: Iterable[Skill] | None = None,
+        seed_active: Iterable[str] | None = None,
+        seed_enabled: bool = False,
     ) -> None:
-        """`store` defaults to an in-memory store (nothing persisted). `seed` is
-        used only when the store is empty — pass `skillkit.default_skills()` to
-        ship starter skills, or None/[] for a blank library."""
+        """`store` defaults to an in-memory store (nothing persisted). `seed`,
+        `seed_active` and `seed_enabled` apply ONLY when the store is empty (first
+        run): seed the starter skills, pre-activate some by id, and set the master
+        switch. On every later run the persisted state wins, so a user's choices
+        are never overwritten."""
         self._store: SkillStore = store or MemorySkillStore()
         self._autosave = autosave
         self._lock = RLock()
@@ -69,6 +94,10 @@ class SkillLibrary:
         if raw is None:
             if seed is not None:
                 self._items = [s.copy() for s in seed]
+            self.config.enabled = seed_enabled
+            if seed_active:
+                self.config.active_ids = [i for i in seed_active if self._get(i)]
+            if seed is not None or seed_active or seed_enabled:
                 self._save()
         else:
             self._load_from(raw)
@@ -320,3 +349,18 @@ class SkillLibrary:
             if not value:
                 self.config.active_ids = [i for i in self.config.active_ids if i != skill_id]
         self._changed()
+
+    # --- import / export (skill exchange) ---
+
+    def export_dict(self, ids: Iterable[str] | None = None) -> dict:
+        """A portable, JSON-ready bundle of skills — all of them, or just `ids`."""
+        with self._lock:
+            wanted = None if ids is None else set(ids)
+            items = [s for s in self._items if wanted is None or s.id in wanted]
+            return {"skillkit": SCHEMA_VERSION, "skills": [s.to_dict() for s in items]}
+
+    def import_skills(self, data: object) -> list[Skill]:
+        """Add skills from an exported bundle, a bare list, or a single skill dict.
+        Imported skills are always editable (never built-in) and get fresh unique
+        ids, so importing never clobbers existing skills. Returns what was added."""
+        return [self.add(skill) for skill in parse_import(data)]

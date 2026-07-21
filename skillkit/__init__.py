@@ -34,7 +34,7 @@ from skillkit.compose import (
     build_persona_block,
     compose_messages,
 )
-from skillkit.library import LibraryConfig, SkillLibrary
+from skillkit.library import LibraryConfig, SkillLibrary, parse_import
 from skillkit.models import (
     SCOPE_BOTH,
     SCOPE_EDITOR,
@@ -67,6 +67,7 @@ __all__ = [
     "compose_messages",
     "default_skills",
     "match_skill",
+    "parse_import",
     "parse_switch",
     "slugify",
 ]

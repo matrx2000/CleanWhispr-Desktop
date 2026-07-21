@@ -66,11 +66,11 @@ class Skill:
         known = {f.name for f in fields(cls)}
         kwargs = {k: v for k, v in data.items() if k in known}
         name = str(kwargs.get("name") or "").strip()
-        ident = str(kwargs.get("id") or "").strip() or slugify(name)
-        if not ident and not name:
-            return None
-        kwargs["id"] = ident
-        kwargs["name"] = name or ident
+        raw_id = str(kwargs.get("id") or "").strip()
+        if not name and not raw_id:
+            return None  # nothing identifiable → not a usable skill record
+        kwargs["id"] = raw_id or slugify(name)
+        kwargs["name"] = name or kwargs["id"]
         if kwargs.get("scope") not in _SCOPES:
             kwargs["scope"] = SCOPE_BOTH
         triggers = kwargs.get("triggers")
@@ -86,8 +86,33 @@ class Skill:
 
 def default_skills() -> list[Skill]:
     """A handful of read-only starter skills, seeded on first run when the
-    library is empty. Deliberately generic and safe — pure tone/voice."""
+    library is empty. Deliberately generic and safe — pure tone/voice, plus one
+    formatting helper (Tables) for Markdown notes."""
     return [
+        Skill(
+            id="markdown-tables",
+            name="Tables",
+            description="Write tables as clean, correctly-rendered Markdown.",
+            body=(
+                "Format any tabular data as a GitHub-flavoured Markdown pipe table so it "
+                "renders correctly in the note:\n"
+                "- Leave one blank line before and one blank line after the table.\n"
+                "- Start and end every row with a pipe: | Item | Qty |\n"
+                "- Put a delimiter row directly under the header, one cell per column, each "
+                "with at least three hyphens: | --- | --- |. Add colons for alignment when "
+                "useful (:--- left, :---: centre, ---: right).\n"
+                "- Give every row — header, delimiter and each body row — exactly the same "
+                "number of columns.\n"
+                "- Keep each cell on a single line; write <br> for an in-cell line break, and "
+                "escape any literal pipe character inside a cell as \\|.\n"
+                "- Never wrap the table in code fences or backticks.\n"
+                "When adding to or editing a table, reproduce the whole table with these "
+                "rules applied so it re-renders cleanly."
+            ),
+            builtin=True,
+            scope=SCOPE_NOTES,
+            triggers=["table", "tables", "markdown table", "spreadsheet"],
+        ),
         Skill(
             id="formal",
             name="Formal",

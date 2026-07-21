@@ -178,8 +178,8 @@ class SettingsWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} Settings")
-        self.setMinimumSize(520, 400)  # fits small laptop screens; tabs scroll
-        self.resize(780, 560)
+        self.setMinimumSize(460, 340)  # fits small/scaled laptop screens; tabs scroll
+        self.resize(700, 500)
         self._on_clear_app_data = on_clear_app_data
         self._on_run_setup = on_run_setup
         self._readme_window: _ReadmeWindow | None = None

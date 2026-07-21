@@ -8,7 +8,9 @@ from skillkit import JsonSkillStore, MemorySkillStore, Skill, SkillLibrary, defa
 def test_seed_only_when_empty():
     store = MemorySkillStore()
     lib = SkillLibrary(store, seed=default_skills())
-    assert {s.id for s in lib.all()} == {"formal", "concise", "friendly", "poet"}
+    assert {s.id for s in lib.all()} == {
+        "markdown-tables", "formal", "concise", "friendly", "poet"
+    }
     # a second library over the now-populated store does NOT re-seed
     lib2 = SkillLibrary(store, seed=default_skills())
     assert len(lib2.all()) == len(lib.all())
@@ -108,7 +110,7 @@ def test_corrupt_json_falls_back(tmp_path):
     lib = SkillLibrary(JsonSkillStore(path), seed=default_skills())
     # unreadable file quarantined, seed applied
     assert (tmp_path / "skills.json.bak").exists()
-    assert len(lib.all()) == 4
+    assert len(lib.all()) == len(default_skills())
 
 
 def test_subscribe_fires_on_change():
@@ -120,3 +122,62 @@ def test_subscribe_fires_on_change():
     unsubscribe()
     lib.activate("concise")
     assert hits == [1]  # no longer notified
+
+
+def test_seed_active_and_enabled_first_run():
+    lib = SkillLibrary(
+        MemorySkillStore(),
+        seed=default_skills(),
+        seed_active=["markdown-tables"],
+        seed_enabled=True,
+    )
+    assert lib.enabled is True
+    assert [s.id for s in lib.active_skills()] == ["markdown-tables"]
+    # Tables is Notes-scoped: active for the notes leg, not the editor
+    assert [s.id for s in lib.active_skills("notes")] == ["markdown-tables"]
+    assert lib.active_skills("editor") == []
+
+
+def test_seed_params_only_apply_on_first_run():
+    store = MemorySkillStore()
+    SkillLibrary(store, seed=default_skills(), seed_active=["poet"], seed_enabled=True)
+    lib = SkillLibrary(store)  # user turns it off + clears
+    lib.set_enabled(False)
+    lib.clear_active()
+    # a later launch with the same seed args must NOT re-enable / re-activate
+    lib2 = SkillLibrary(store, seed=default_skills(), seed_active=["poet"], seed_enabled=True)
+    assert lib2.enabled is False
+    assert lib2.active_skills() == []
+
+
+def test_tables_skill_is_a_notes_scoped_builtin():
+    tables = next(s for s in default_skills() if s.id == "markdown-tables")
+    assert tables.builtin is True
+    assert tables.scope == "notes"
+    assert "pipe table" in tables.body
+
+
+def test_export_import_roundtrip():
+    src = SkillLibrary(MemorySkillStore(), seed=default_skills())
+    bundle = src.export_dict(["poet"])
+    assert bundle["skills"][0]["id"] == "poet"
+
+    dst = SkillLibrary(MemorySkillStore())
+    added = dst.import_skills(bundle)
+    assert len(added) == 1 and added[0].name == "Poet"
+    assert added[0].builtin is False  # imported skills are editable
+    assert dst.get(added[0].id) is not None
+
+
+def test_import_assigns_fresh_id_no_clobber():
+    lib = SkillLibrary(MemorySkillStore(), seed=default_skills())
+    added = lib.import_skills({"id": "poet", "name": "Poet", "body": "x"})
+    assert added[0].id != "poet"  # collision → fresh id
+    assert lib.get("poet").name == "Poet"  # the original is untouched
+
+
+def test_import_tolerates_list_single_and_junk():
+    lib = SkillLibrary(MemorySkillStore())
+    assert len(lib.import_skills([{"name": "A", "body": "a"}, {"name": "B"}])) == 2
+    assert len(lib.import_skills({"name": "C", "body": "c"})) == 1
+    assert lib.import_skills({"garbage": True}) == []  # nothing identifiable

@@ -94,9 +94,13 @@ def main() -> int:
     db = HistoryDb()
 
     # skills: a self-contained persona layer (own JSON store, seeded once on
-    # first run). The bridge fans library changes out to the tray/palette/tab.
+    # first run — feature on with the Tables helper active by default). The
+    # bridge fans library changes out to the tray/palette/tab.
     skills = SkillLibrary(
-        JsonSkillStore(paths.config_dir() / "skills.json"), seed=default_skills()
+        JsonSkillStore(paths.config_dir() / "skills.json"),
+        seed=default_skills(),
+        seed_active=["markdown-tables"],
+        seed_enabled=True,
     )
     skills_bridge = SkillsBridge(skills)
 
