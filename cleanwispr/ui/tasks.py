@@ -27,11 +27,13 @@ class DownloadTask(QObject):
     """One download with progress; cancellable. Public signals fire on the
     Qt main thread."""
 
-    progress = Signal(int, object)  # received_bytes, total_bytes|None
+    # object (not int) for the byte counts: a Qt `int` is C++ int32 and overflows
+    # once a download passes ~2.14 GB (libshiboken OverflowError); Python ints don't
+    progress = Signal(object, object)  # received_bytes, total_bytes|None
     finished = Signal()
     failed = Signal(str)
 
-    _worker_progress = Signal(int, object)
+    _worker_progress = Signal(object, object)
     _worker_finished = Signal()
     _worker_failed = Signal(str)
 

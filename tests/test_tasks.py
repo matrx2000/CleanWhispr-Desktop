@@ -25,6 +25,23 @@ def test_download_task_signals_arrive_on_main_thread(qtbot):
     assert seen["finished"] == main_thread
 
 
+def test_download_task_handles_byte_counts_over_2gb(qtbot):
+    # a Qt int is 32-bit and overflows past ~2.14 GB; model downloads are larger,
+    # so the progress signal must carry the byte counts as Python ints (object)
+    big = 3_336_156_352  # ~3.3 GB, well over int32 max (2_147_483_647)
+    seen = []
+
+    def work(progress, cancel):
+        progress(big, big + 4096)
+
+    task = DownloadTask(work)
+    task.progress.connect(lambda received, total: seen.append((received, total)))
+    with qtbot.waitSignal(task.finished, timeout=3000):
+        task.start()
+
+    assert seen == [(big, big + 4096)]  # delivered intact, no OverflowError
+
+
 def test_download_task_failure_arrives_on_main_thread(qtbot):
     main_thread = threading.get_ident()
     seen: dict[str, object] = {}
