@@ -30,6 +30,8 @@ from cleanwispr.ui.settings.window import SettingsWindow
 from cleanwispr.ui.sounds import SoundPlayer
 from cleanwispr.ui.thinking_panel import ThinkingPanel
 from cleanwispr.ui.tray import TrayManager
+from skillkit import JsonSkillStore, SkillLibrary, default_skills
+from skillkit.qt import SkillPalette, SkillsBridge
 
 log = logging.getLogger(__name__)
 
@@ -91,8 +93,15 @@ def main() -> int:
         autostart.set_autostart(True)  # keep the registry command current
     db = HistoryDb()
 
+    # skills: a self-contained persona layer (own JSON store, seeded once on
+    # first run). The bridge fans library changes out to the tray/palette/tab.
+    skills = SkillLibrary(
+        JsonSkillStore(paths.config_dir() / "skills.json"), seed=default_skills()
+    )
+    skills_bridge = SkillsBridge(skills)
+
     engines = {"whisper": WhisperCppEngine(), "parakeet": ParakeetEngine()}
-    controller = Controller(settings, db, Recorder(), engines, _make_injector())
+    controller = Controller(settings, db, Recorder(), engines, _make_injector(), skills=skills)
 
     def on_settings_changed() -> None:
         settings_store.save(settings)
@@ -193,9 +202,22 @@ def main() -> int:
         apply_hotkeys,
         on_clear_app_data=clear_app_data,
         on_run_setup=open_setup_guide,
+        skills=skills,
+        skills_bridge=skills_bridge,
     )
     controller.history_changed.connect(settings_window.history_tab.refresh)
     tray.set_open_settings(_show(settings_window))
+
+    # "/" quick-switch palette + tray submenu (no global hotkey by design —
+    # opened from the tray or the Skills tab)
+    skill_palette = SkillPalette(skills, changed_signal=skills_bridge.changed)
+    skill_palette.create_requested.connect(settings_window.show_skills)
+    tray.set_skills(
+        skills,
+        skills_bridge,
+        on_quick_switch=skill_palette.popup,
+        on_manage_skills=settings_window.show_skills,
+    )
 
     notes_window = NotesWindow(settings, controller, on_settings_changed)
     show_notes = _show(notes_window)

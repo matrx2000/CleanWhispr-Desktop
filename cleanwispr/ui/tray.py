@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import partial
+
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -35,6 +38,15 @@ class TrayManager:
         menu.addAction(self._editor_action)
 
         menu.addSeparator()
+        # Skills submenu is populated later via set_skills() (kept empty/hidden
+        # until the host wires a library); insert it before Notes for a stable order
+        self._skills_menu = QMenu("Skills")
+        self._skills_menu.menuAction().setVisible(False)
+        menu.addMenu(self._skills_menu)
+        self._skills = None
+        self._on_quick_switch: Callable[[], None] | None = None
+        self._on_manage_skills: Callable[[], None] | None = None
+
         self._notes_action = QAction("Open Notes…")
         menu.addAction(self._notes_action)
 
@@ -68,6 +80,69 @@ class TrayManager:
 
     def set_open_notes(self, callback) -> None:
         self._notes_action.triggered.connect(callback)
+
+    def set_skills(
+        self,
+        library,
+        bridge,
+        on_quick_switch: Callable[[], None],
+        on_manage_skills: Callable[[], None],
+    ) -> None:
+        """Wire the Skills submenu to a skillkit library. `bridge.changed` keeps
+        the active checkmarks in sync when skills change from voice or the UI."""
+        self._skills = library
+        self._on_quick_switch = on_quick_switch
+        self._on_manage_skills = on_manage_skills
+        self._skills_menu.menuAction().setVisible(True)
+        bridge.changed.connect(self._rebuild_skills_menu)
+        self._rebuild_skills_menu()
+
+    def _rebuild_skills_menu(self) -> None:
+        menu = self._skills_menu
+        menu.clear()
+        library = self._skills
+        if library is None:
+            return
+
+        enable = QAction("Enable skills", menu)
+        enable.setCheckable(True)
+        enable.setChecked(library.enabled)
+        enable.toggled.connect(library.set_enabled)
+        menu.addAction(enable)
+        menu.addSeparator()
+
+        if library.enabled:
+            active_ids = {s.id for s in library.active_skills()}
+            skills = library.enabled_skills()
+            if skills:
+                for skill in skills:
+                    action = QAction(skill.name, menu)
+                    action.setCheckable(True)
+                    action.setChecked(skill.id in active_ids)
+                    action.toggled.connect(partial(self._set_skill_active, skill.id))
+                    menu.addAction(action)
+            else:
+                empty = QAction("No skills yet — add one below", menu)
+                empty.setEnabled(False)
+                menu.addAction(empty)
+            menu.addSeparator()
+            if self._on_quick_switch is not None:
+                quick = QAction("Quick switch…", menu)
+                quick.triggered.connect(lambda: self._on_quick_switch())
+                menu.addAction(quick)
+
+        if self._on_manage_skills is not None:
+            manage = QAction("Manage skills…", menu)
+            manage.triggered.connect(lambda: self._on_manage_skills())
+            menu.addAction(manage)
+
+    def _set_skill_active(self, skill_id: str, active: bool) -> None:
+        if self._skills is None:
+            return
+        if active:
+            self._skills.activate(skill_id)
+        else:
+            self._skills.deactivate(skill_id)
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         # left-click toggles dictation (context menu handles the rest)

@@ -37,6 +37,9 @@ from cleanwispr.storage.db import HistoryDb
 from cleanwispr.storage.settings import ActivationMode, Settings
 from cleanwispr.stt.base import SAMPLE_RATE, SttError
 from cleanwispr.stt.whisper_cpp import WhisperCppEngine
+from skillkit import voice
+from skillkit.library import SkillLibrary
+from skillkit.store import MemorySkillStore
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +79,7 @@ class _PipelineOutcome:
     source_text: str | None = None
     duration_ms: int = 0
     audio_path: str | None = None
+    switch_only: bool = False  # a voice skill-switch: no edit ran, nothing to paste/log
 
 
 class Controller(QObject):
@@ -102,10 +106,14 @@ class Controller(QObject):
         recorder: Recorder,
         engine: WhisperCppEngine | dict,
         injector: TextInjector,
+        skills: SkillLibrary | None = None,
     ) -> None:
         super().__init__()
         self.settings = settings
         self._db = db
+        # the skills layer is optional and self-contained; a disabled in-memory
+        # library keeps the feature a pure no-op when the host doesn't wire one
+        self._skills = skills or SkillLibrary(MemorySkillStore())
         self._recorder = recorder
         # engine: a single SttEngine (used for every stt.engine setting) or a
         # dict of {"whisper": ..., "parakeet": ...}
@@ -322,6 +330,16 @@ class Controller(QObject):
             log.exception("paste failed")
             outcome.message = f"Paste failed ({exc}) — text is on the clipboard"
 
+    def _apply_skill_overrides(self, options, scope: str) -> None:
+        """Let the active skills pin temperature/model (last active wins). No-op
+        when the feature is off or no active skill overrides them."""
+        temperature = self._skills.resolved_temperature(scope)
+        if temperature is not None:
+            options.temperature = temperature
+        model = self._skills.resolved_model(scope)
+        if model:
+            options.model = model
+
     def _run_dictation(self, pcm, settings: Settings) -> None:
         result = self._transcribe(pcm, settings)
         if result is None:
@@ -359,6 +377,23 @@ class Controller(QObject):
             return
         self.edit_status.emit(f"“{instruction}”")
 
+        # a spoken skill switch ("switch to poet", "plain") arms/clears skills
+        # instead of running an edit — voice switching is editor-only (M-skills)
+        if self._skills.enabled and self._skills.config.voice_switching:
+            verdict = voice.parse_switch(instruction, self._skills)
+            if verdict.outcome != voice.PASSTHROUGH:
+                if verdict.outcome == voice.APPLIED:
+                    self._skills.apply_verdict(verdict)
+                self._outcome_ready.emit(
+                    _PipelineOutcome(
+                        ok=True,
+                        kind=SessionKind.EDIT,
+                        switch_only=True,
+                        message=verdict.notice,
+                    )
+                )
+                return
+
         try:
             selection = self._injector.capture_selection()
         except Exception:
@@ -368,6 +403,8 @@ class Controller(QObject):
         self._stage_changed.emit(AppState.EDITING)
         self.edit_thinking.emit(self._session_preamble(instruction, selection))
         options = llm_factory.chat_options(settings.llm)
+        active_skills = self._skills.active_skills(scope="editor")
+        self._apply_skill_overrides(options, "editor")
         try:
             provider = llm_factory.create_provider(settings.llm)
             if not provider.is_available():
@@ -383,9 +420,9 @@ class Controller(QObject):
                     )
                     return
             if selection:
-                messages = build_edit_messages(instruction, selection)
+                messages = build_edit_messages(instruction, selection, active_skills)
             else:
-                messages = build_generate_messages(instruction)
+                messages = build_generate_messages(instruction, active_skills)
             edited = clean_llm_output(self._stream_with_status(provider, messages, options))
         except LlmProviderError as exc:
             self._outcome_ready.emit(
@@ -457,6 +494,8 @@ class Controller(QObject):
         self._stage_changed.emit(AppState.EDITING)
         self.edit_thinking.emit(self._session_preamble(instruction, source or None))
         options = llm_factory.chat_options(settings.llm)
+        active_skills = self._skills.active_skills(scope="notes")
+        self._apply_skill_overrides(options, "notes")
         try:
             provider = llm_factory.create_provider(settings.llm)
             if not provider.is_available():
@@ -472,11 +511,11 @@ class Controller(QObject):
                     )
                     return
             if mode == NOTES_MODE_WHOLE and source:
-                messages = build_whole_note_messages(instruction, source)
+                messages = build_whole_note_messages(instruction, source, active_skills)
             elif mode == NOTES_MODE_SELECTION and source:
-                messages = build_edit_messages(instruction, source)
+                messages = build_edit_messages(instruction, source, active_skills)
             else:
-                messages = build_generate_messages(instruction)
+                messages = build_generate_messages(instruction, active_skills)
             edited = clean_llm_output(self._stream_with_status(provider, messages, options))
         except LlmProviderError as exc:
             self._outcome_ready.emit(
@@ -572,6 +611,13 @@ class Controller(QObject):
 
     def _on_outcome(self, outcome: _PipelineOutcome) -> None:
         """Main thread: persist history, settle state."""
+        if outcome.switch_only:
+            # a voice skill-switch — announce it, nothing to paste or record
+            if outcome.message:
+                self.notice.emit(outcome.message)
+            self._set_state(AppState.IDLE)
+            self._session_kind = None
+            return
         if outcome.ok:
             self._set_state(AppState.INJECTING)
             if self.settings.history.enabled:

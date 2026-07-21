@@ -37,6 +37,7 @@ from cleanwispr.ui.settings.editor_tab import EditorTab
 from cleanwispr.ui.settings.history_tab import HistoryTab
 from cleanwispr.ui.settings.hotkeys_tab import HotkeysTab
 from cleanwispr.ui.settings.notes_tab import NotesTab
+from cleanwispr.ui.settings.skills_tab import SkillsTab
 from cleanwispr.ui.settings.transcription_tab import TranscriptionTab
 from cleanwispr.ui.widgets import ACCENT_SOFT, LabeledToggle, PathLink
 
@@ -172,6 +173,8 @@ class SettingsWindow(QMainWindow):
         on_hotkeys_changed: Callable[[], None],
         on_clear_app_data: Callable[[], None] | None = None,
         on_run_setup: Callable[[], None] | None = None,
+        skills=None,
+        skills_bridge=None,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} Settings")
@@ -181,14 +184,20 @@ class SettingsWindow(QMainWindow):
         self._on_run_setup = on_run_setup
         self._readme_window: _ReadmeWindow | None = None
         self._notes_dir_changed_cb: Callable[[], None] | None = None
+        self.skills_tab: SkillsTab | None = None
+        self._skills_tab_index = -1
 
         # ordered by how a new user sets things up: engine → editor → triggers → mic
         tabs = QTabWidget()
+        self._tabs = tabs
         # TranscriptionTab brings its own scroll area
         self.transcription_tab = TranscriptionTab(settings, on_settings_changed)
         tabs.addTab(self.transcription_tab, "Transcription")
         self.editor_tab = EditorTab(settings, on_settings_changed)
         tabs.addTab(_scrollable(self.editor_tab), "Voice Editor")
+        if skills is not None and skills_bridge is not None:
+            self.skills_tab = SkillsTab(settings, skills, skills_bridge)
+            self._skills_tab_index = tabs.addTab(_scrollable(self.skills_tab), "Skills")
         tabs.addTab(
             _scrollable(HotkeysTab(settings, on_settings_changed, on_hotkeys_changed)),
             "Hotkeys",
@@ -415,12 +424,22 @@ class SettingsWindow(QMainWindow):
         self._readme_window.raise_()
         self._readme_window.activateWindow()
 
+    def show_skills(self) -> None:
+        """Open the window with the Skills tab selected (tray / palette entry)."""
+        if self._skills_tab_index >= 0:
+            self._tabs.setCurrentIndex(self._skills_tab_index)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     def showEvent(self, event) -> None:  # Qt override, keeps Qt naming
         # the window is built once at startup and reused; re-sync each time it's
         # opened so downloads/choices made meanwhile (setup wizard, etc.) show up
         super().showEvent(event)
         self.transcription_tab.refresh()
         self.editor_tab.refresh()
+        if self.skills_tab is not None:
+            self.skills_tab.refresh()
 
     def closeEvent(self, event) -> None:  # Qt override, keeps Qt naming
         # closing the window hides it; the app lives in the tray
