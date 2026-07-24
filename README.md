@@ -1,16 +1,18 @@
 # CleanWispr
 
-**Version 0.2.6** · Local voice-to-text, voice-driven text editing, and voice notetaking for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
+**Version 0.3.0** · Local voice-to-text, voice-driven text editing, and voice notetaking for Windows 10/11 and Linux (experimental macOS). Python + PySide6. **No cloud, no accounts, no telemetry — audio and text never leave your PC.**
 
 ## What it does
 
-**🎙 Dictation** — press a global hotkey in any application, speak, and the transcript is pasted at your cursor. Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) running locally as a warm background server, so transcription starts instantly.
+**🎙 Dictation** — press a global hotkey in any application, speak, and the transcript is pasted at your cursor. Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) running locally as a warm background server, so transcription starts instantly. With **live typing** (on by default), words appear in the target app *while you're still speaking*: only words two consecutive recognition passes agree on are typed, and when you stop, the final transcript corrects the preview in place — so you get instant feedback without garbled text.
 
 **✏ Voice editor** — select text anywhere, press the editor hotkey, and speak a command: *"make this formal"*, *"remove the second sentence"*, *"translate this to English"*. A local LLM (via [Ollama](https://ollama.com)) applies the edit and the result replaces your selection. With nothing selected, it writes new text from your command.
 
 **📝 Notes** — a built-in notetaking window (its own hotkey, or tray → *Open Notes…*) with a WYSIWYG Markdown editor: headings, lists, checklists, colours, tables, and paste-in images. Organise notes into **vaults** and folders, and use the on-screen slider to **dictate** into a note or run an **AI take** (rewrite the selection, or append generated text) — all still fully local.
 
 **🎭 Skills** — reusable *roles* for the voice editor and Notes AI: *"a formal editor"*, *"a witty poet"*, or the built-in **Tables** helper that keeps Markdown tables rendering cleanly. Activate one or several (they **stack**), switch hands-free by voice (*"switch to poet"*, *"plain"* to clear) or from the tray, and manage them in **Settings → Skills** — add, edit, set voice triggers, per-skill temperature/model, and **import/export as JSON** to share. A skill only shapes tone and formatting; the app keeps control of the output, so a persona can't break the paste-only result.
+
+**🛠 Tools** — skills say *how* the model should write; tools are *what it can do*. Small Python capabilities the voice editor's LLM can execute while answering: fetch and read a web page, run a calculation in a sandboxed Python subprocess, or — when you ask it to — **create a brand-new tool** for you (it ships with a built-in *Tool author* skill that teaches it the format; new tools stay disabled until you review and enable them). Manage everything in **Settings → Tools**: per-tool switches, an ask-before-every-call mode, **import/export as .zip**, and a separate **web-access switch (off by default)** with a clear warning about the risks of feeding web content to a local model.
 
 ## Screenshots
 
@@ -28,7 +30,8 @@
 |---|---|
 | **Transcription** | Two engines: **whisper.cpp** (CPU / **CUDA** / Vulkan builds, Metal on macOS; 6 model sizes Tiny → Large-v3 + Turbo; 60+ languages; custom dictionary) and **NVIDIA Parakeet** via sherpa-onnx (in-process, extremely fast even on CPU; multilingual v3 with auto language detection). All models downloaded in-app with progress **and cancel**; the engine-build picker **auto-detects your GPU** and marks the recommended build (CUDA/Vulkan/CPU) |
 | **Voice editor** | Ollama model auto-discovery with parameter/quantization/context info; **hardware-aware model recommendations** (best-quality vs. smallest-usable for your GPU/RAM); **searchable model library** across families (Gemma, Qwen, Llama, Mistral, Phi, DeepSeek…) with **one-click install** — or install anything by name via `ollama pull …` (name-only extraction, nothing executed); auto-starts Ollama if it isn't running; hardened prompts (selection is data, output-only). The install/recommend flow is provider-agnostic — a future non-Ollama backend gets it for free |
-| **Live feedback** | Overlay pill narrates every stage: mic warm-up → recording (level-reactive) → transcribing → model loading (with seconds counter) → writing → pasting; **thinking panel** streams reasoning models' thoughts as markdown, with the exact command + selection that was sent; synthesized audio cues (toggleable) |
+| **Live feedback** | **Live typing**: dictated words stream into the target app while you speak (stable-prefix commits via the LocalAgreement-2 policy; the final transcript then fixes the preview in place with a minimal backspace-and-retype delta). Automatically skipped in terminals, paused while hotkey modifiers are held, frozen if you switch windows (text lands on the clipboard instead). Overlay pill narrates every stage: mic warm-up → recording (level-reactive) → transcribing → model loading (with seconds counter) → writing → pasting; **thinking panel** streams reasoning models' thoughts as markdown, with the exact command + selection that was sent; synthesized audio cues (toggleable) |
+| **Tools** | User-installable Python capabilities the LLM can call via **Ollama function calling** (capability-detected per model): built-in **HTTP fetch** (page → readable text), **Run Python** (sandboxed snippet execution, asks permission per call), and **Create tool** (the model writes new tools on request — always created disabled for review). Tools run in an isolated `python -I` subprocess with a hard timeout and output cap; exchanged as **.zip** files; governed by per-tool switches, an optional confirm-everything mode, and a default-off **web access** switch with an explicit prompt-injection warning. Built as a standalone, reusable `toolkit` package |
 | **Notes** | A standalone notetaking workspace with a WYSIWYG Markdown editor (headings, lists, checklists, inline code, custom text/highlight colours, full tables with row/column/merge/split ops) and **paste-or-drop images** saved as attachments beside the note. Multiple **vaults** (folders you can add, switch, sync, or back up as a unit) with project subfolders; notes stored as portable HTML with Markdown export. A gated-shifter **slider** drives voice input — slide left to **dictate** into the note, right for an **AI take** (edit the selection, or append generated text), up to peek raw Markdown, down to undo the last voice insert |
 | **Skills** | Reusable personas/roles layered onto the voice editor and Notes AI as a tone-and-formatting *style* — **injection-hardened** so a user-written persona can't break the output contract (nonce-fenced data, guardrail sandwich). **Stackable** (several active at once), with per-skill temperature/model overrides and **voice switching** (*"switch to poet"*, *"use the concise skill"*, *"plain"* to clear). Ships built-in skills including a **Tables** formatter that keeps Markdown tables rendering correctly in Notes (on by default); manage them via a "/" quick-switch palette, a tray submenu, and a **Settings → Skills** editor with **JSON import/export** to share skills. Built as a standalone, reusable `skillkit` package |
 | **Hotkeys** | Three global shortcuts (dictation / editor / notes), click-to-capture UI, toggle or push-to-hold per slot, Esc cancels, overlap-conflict validation across all slots with clear explanations |
@@ -218,6 +221,53 @@ pre-uninstall cleanup). The AI model receives only your spoken command and the
 selected text — never your history.
 
 ## Changelog
+
+### 0.3.0
+
+**New**
+
+- **Live typing — see your words while you speak** (Settings → Transcription,
+  on by default): during dictation the recording is re-transcribed in the
+  background and words are typed into the target app as soon as **two
+  consecutive recognition passes agree** on them (the LocalAgreement-2 policy
+  from UFAL's whisper_streaming research — agreement filters out word flicker
+  and Whisper's silence hallucinations). When you stop, the full-take
+  transcript **corrects the preview in place** with a minimal
+  backspace-and-retype delta, so the final text is always the authoritative
+  transcript. Guard rails: typing pauses while you hold a hotkey modifier,
+  freezes if you switch windows (the finished text goes to the clipboard
+  instead), never presses Enter, and terminals are skipped entirely (classic
+  paste-at-end there). Works with both engines; Parakeet's speed makes the
+  preview especially snappy.
+- **Tools — let the model actually do things**: user-installable Python
+  capabilities the voice editor's LLM can call mid-answer via Ollama function
+  calling (auto-detected per model; qwen3 / llama3.1 / mistral / gemma4 support
+  it, gemma3 doesn't). Ships with three built-ins:
+  - **HTTP fetch** — download a web page or API and hand the model its
+    readable text (title + stripped content, size-capped).
+  - **Run Python** — execute a model-written snippet in an isolated
+    `python -I` subprocess with a hard timeout; **asks your permission for
+    every call** by default.
+  - **Create tool** — ask by voice ("create a tool that …") and the model
+    writes a complete new tool (manifest + code) into your library, guided by
+    the new built-in **Tool author** skill. Model-authored tools are **always
+    created disabled** — nothing runs until you review and enable it.
+- **Settings → Tools**: enable/disable each tool, ask-before-every-call mode,
+  **import/export tools as .zip** (imported tools also land disabled until
+  reviewed), open-folder shortcut — and a separate **"Allow tools that access
+  the internet" switch, off by default**, with a prominent warning explaining
+  prompt injection: a fetched page can carry hidden instructions that hijack a
+  small local model, so web access is strictly opt-in. Tool results are fenced
+  and labelled as data in the prompt, every call is narrated in the overlay,
+  and a round budget stops runaway tool loops.
+- Tools are implemented as a **standalone, reusable `toolkit` package**
+  (stdlib-only core, its own `tools.json` store + `tools/` folder), mirroring
+  `skillkit`.
+
+**Fixed**
+
+- PyInstaller bundles now include the built-in tools; `pip install .` now
+  installs the `skillkit` and `toolkit` packages alongside `cleanwispr`.
 
 ### 0.2.7
 

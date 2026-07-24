@@ -15,6 +15,7 @@ import httpx
 from cleanwispr.llm.base import (
     ChatMessage,
     ChatOptions,
+    ChatTurn,
     InstallableModel,
     LlmModelInfo,
     LlmProvider,
@@ -162,6 +163,7 @@ class OllamaProvider(LlmProvider):
         self._client = client or httpx.Client(timeout=_CHAT_TIMEOUT)
         self._thinking_cache: dict[str, bool] = {}
         self._vision_cache: dict[str, bool] = {}
+        self._tools_cache: dict[str, bool] = {}
 
     def catalog(self) -> list[InstallableModel]:
         return list(_CATALOG)
@@ -190,7 +192,9 @@ class OllamaProvider(LlmProvider):
 
     def list_models(self) -> list[LlmModelInfo]:
         try:
-            response = self._client.get(self._url("/api/tags"))
+            # short timeout: this feeds settings UIs — it must fail fast, not
+            # inherit the chat client's 600s read budget
+            response = self._client.get(self._url("/api/tags"), timeout=10)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise self._unreachable(exc) from exc
@@ -209,7 +213,9 @@ class OllamaProvider(LlmProvider):
 
     def model_info(self, model_id: str) -> LlmModelInfo:
         try:
-            response = self._client.post(self._url("/api/show"), json={"model": model_id})
+            response = self._client.post(
+                self._url("/api/show"), json={"model": model_id}, timeout=10
+            )
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise self._unreachable(exc) from exc
@@ -302,6 +308,12 @@ class OllamaProvider(LlmProvider):
         """Does the model expose reasoning tokens? (/api/show capabilities)."""
         return self._has_capability(model_id, "thinking", self._thinking_cache)
 
+    def supports_tools(self, model_id: str) -> bool:
+        """Function calling, from /api/show capabilities. Note gemma3/gemma3n
+        have no tool template (sending tools errors), while qwen3, llama3.1+,
+        mistral, and gemma4 do — capability-gating is mandatory here."""
+        return self._has_capability(model_id, "tools", self._tools_cache)
+
     def _has_capability(self, model_id: str, capability: str, cache: dict[str, bool]) -> bool:
         cached = cache.get(model_id)
         if cached is not None:
@@ -373,31 +385,94 @@ class OllamaProvider(LlmProvider):
         )
         return False
 
+    @staticmethod
+    def _wire_messages(messages: list[ChatMessage]) -> list[dict]:
+        wire = []
+        for message in messages:
+            entry: dict = {"role": message.role, "content": message.content}
+            if message.images:  # Ollama accepts base64 images per message (vision models)
+                entry["images"] = message.images
+            if message.tool_calls:  # echo the assistant's calls back into history
+                entry["tool_calls"] = message.tool_calls
+            if message.tool_name:  # role="tool" result; tool_name since Ollama 0.9
+                entry["tool_name"] = message.tool_name
+            wire.append(entry)
+        return wire
+
+    def _chat_payload(
+        self,
+        messages: list[ChatMessage],
+        options: ChatOptions,
+        on_thinking: Callable[[str], None] | None,
+        tools: list[dict] | None = None,
+    ) -> dict:
+        if not options.model:
+            raise LlmProviderError(
+                "No Ollama model selected — pick one in Settings → Editor (LLM)."
+            )
+        payload = {
+            "model": options.model,
+            "messages": self._wire_messages(messages),
+            "stream": True,
+            "keep_alive": options.keep_alive,
+            "options": {"num_ctx": options.num_ctx, "temperature": options.temperature},
+        }
+        if tools:
+            payload["tools"] = tools
+        if on_thinking is not None and self.supports_thinking(options.model):
+            payload["think"] = True
+        return payload
+
+    def chat_turn(
+        self,
+        messages: list[ChatMessage],
+        options: ChatOptions,
+        tools: list[dict] | None = None,
+        on_thinking: Callable[[str], None] | None = None,
+        on_content: Callable[[str], None] | None = None,
+    ) -> ChatTurn:
+        """One full /api/chat turn with optional tools. Ollama streams tool
+        calls (v0.8+) as complete objects inside `message.tool_calls` chunks,
+        with `arguments` already parsed into a dict — collect them all."""
+        payload = self._chat_payload(messages, options, on_thinking, tools)
+        chunks: list[str] = []
+        tool_calls: list[dict] = []
+        try:
+            with self._client.stream("POST", self._url("/api/chat"), json=payload) as response:
+                if response.status_code != 200:
+                    body = response.read().decode(errors="replace")[:300]
+                    raise LlmProviderError(f"Ollama error {response.status_code}: {body}")
+                for line in response.iter_lines():
+                    if not line.strip():
+                        continue
+                    chunk = json.loads(line)
+                    if chunk.get("error"):
+                        raise LlmProviderError(f"Ollama error: {chunk['error']}")
+                    message = chunk.get("message") or {}
+                    thinking = message.get("thinking")
+                    if thinking and on_thinking is not None:
+                        on_thinking(thinking)
+                    calls = message.get("tool_calls")
+                    if calls:
+                        tool_calls.extend(c for c in calls if isinstance(c, dict))
+                    content = message.get("content", "")
+                    if content:
+                        chunks.append(content)
+                        if on_content is not None:
+                            on_content(content)
+                    if chunk.get("done"):
+                        break
+        except httpx.HTTPError as exc:
+            raise self._unreachable(exc) from exc
+        return ChatTurn(content="".join(chunks), tool_calls=tool_calls)
+
     def chat(
         self,
         messages: list[ChatMessage],
         options: ChatOptions,
         on_thinking: Callable[[str], None] | None = None,
     ) -> Iterator[str]:
-        if not options.model:
-            raise LlmProviderError(
-                "No Ollama model selected — pick one in Settings → Editor (LLM)."
-            )
-        wire_messages = []
-        for message in messages:
-            entry = {"role": message.role, "content": message.content}
-            if message.images:  # Ollama accepts base64 images per message (vision models)
-                entry["images"] = message.images
-            wire_messages.append(entry)
-        payload = {
-            "model": options.model,
-            "messages": wire_messages,
-            "stream": True,
-            "keep_alive": options.keep_alive,
-            "options": {"num_ctx": options.num_ctx, "temperature": options.temperature},
-        }
-        if on_thinking is not None and self.supports_thinking(options.model):
-            payload["think"] = True
+        payload = self._chat_payload(messages, options, on_thinking)
         try:
             with self._client.stream("POST", self._url("/api/chat"), json=payload) as response:
                 if response.status_code != 200:

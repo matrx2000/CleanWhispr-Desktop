@@ -31,7 +31,7 @@ from cleanwispr.stt import downloader, registry
 from cleanwispr.stt.languages import LANGUAGES
 from cleanwispr.ui import theme
 from cleanwispr.ui.tasks import AsyncTask, DownloadTask
-from cleanwispr.ui.widgets import ModelRow, intro_label
+from cleanwispr.ui.widgets import LabeledToggle, ModelRow, intro_label
 
 # which whisper-server build best matches each detected accelerator
 _RECOMMENDED_VARIANT: dict[str, str] = {
@@ -63,6 +63,7 @@ class TranscriptionTab(QWidget):
         layout.addWidget(self._parakeet_group())
         layout.addWidget(self._storage_group())
         layout.addWidget(self._language_group())
+        layout.addWidget(self._live_typing_group())
         layout.addStretch()
 
         scroll = QScrollArea()
@@ -342,6 +343,34 @@ class TranscriptionTab(QWidget):
         self._switch_engine("parakeet")
 
     # --- model storage location ---
+
+    def _live_typing_group(self) -> QGroupBox:
+        group = QGroupBox("Live typing")
+        layout = QVBoxLayout(group)
+
+        toggle = LabeledToggle("Type words into the target app while you speak")
+        toggle.setChecked(self._settings.stt.live_typing)
+
+        def changed(checked: bool) -> None:
+            self._settings.stt.live_typing = checked
+            self._on_change()
+
+        toggle.toggled.connect(changed)
+        layout.addWidget(toggle)
+
+        hint = QLabel(
+            "Streams words as soon as two consecutive passes of the recogniser "
+            "agree on them, so you see your dictation appear while you talk. When "
+            "the take ends, the final transcript corrects the preview in place "
+            "(backspace + retype of anything that changed). Automatically skipped "
+            "in terminal windows, and typing pauses while you hold a hotkey. If "
+            "you switch windows mid-take, typing stops and the finished text "
+            "lands on the clipboard instead."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {theme.MUTED}; font-size: 11px;")
+        layout.addWidget(hint)
+        return group
 
     def _storage_group(self) -> QGroupBox:
         group = QGroupBox("Model storage location")

@@ -54,9 +54,23 @@ PullProgressFn = Callable[[int, int], None]
 
 @dataclass(slots=True)
 class ChatMessage:
-    role: str  # "system" | "user" | "assistant"
+    role: str  # "system" | "user" | "assistant" | "tool"
     content: str
     images: list[str] | None = None  # base64-encoded images (vision models only)
+    # function calling (tools): an assistant message may carry the calls it
+    # made; a role="tool" message carries one call's result under its name
+    tool_calls: list[dict] | None = None
+    tool_name: str | None = None
+
+
+@dataclass(slots=True)
+class ChatTurn:
+    """One complete model response: streamed text plus any tool calls the
+    model emitted. Wire format of `tool_calls` follows Ollama/OpenAI:
+    [{"function": {"name": str, "arguments": dict}}, ...]."""
+
+    content: str
+    tool_calls: list[dict]
 
 
 @dataclass(slots=True)
@@ -105,6 +119,30 @@ class LlmProvider(ABC):
         """Can this model accept images (multimodal)? Providers that can't tell
         return False so callers fall back to text-only."""
         return False
+
+    def supports_tools(self, model_id: str) -> bool:
+        """Does the model do function calling? False → callers chat without
+        tools (e.g. gemma3 has no tool template even though gemma4 does)."""
+        return False
+
+    def chat_turn(
+        self,
+        messages: list[ChatMessage],
+        options: ChatOptions,
+        tools: list[dict] | None = None,
+        on_thinking: Callable[[str], None] | None = None,
+        on_content: Callable[[str], None] | None = None,
+    ) -> ChatTurn:
+        """One full response turn, optionally offering `tools` (Ollama/OpenAI
+        function definitions). Content still streams via on_content. The
+        default consumes chat() and never returns tool calls, so providers
+        without function calling keep working unchanged."""
+        chunks: list[str] = []
+        for chunk in self.chat(messages, options, on_thinking=on_thinking):
+            chunks.append(chunk)
+            if on_content is not None:
+                on_content(chunk)
+        return ChatTurn(content="".join(chunks), tool_calls=[])
 
     def is_model_loaded(self, model_id: str) -> bool | None:
         """Is the model resident in memory right now? None = provider can't tell."""

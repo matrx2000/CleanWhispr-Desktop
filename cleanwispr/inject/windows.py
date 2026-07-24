@@ -181,6 +181,39 @@ def _send_paste(shift: bool) -> None:
 
 
 class WindowsInjector(TextInjector):
+    supports_live_typing = True
+
+    def copy_text(self, text: str) -> None:
+        # a deliberate copy the user will paste manually — keep it in Win+V
+        set_clipboard_text(text, exclude_from_history=False)
+
+    def focus_token(self) -> object | None:
+        hwnd = user32.GetForegroundWindow()
+        return int(hwnd) if hwnd else None
+
+    def focus_is_terminal(self) -> bool:
+        exe_name, window_class = _foreground_app()
+        return is_terminal(exe_name, window_class)
+
+    def modifiers_held(self) -> bool:
+        return any(user32.GetAsyncKeyState(vk) & 0x8000 for vk in _MODIFIER_VKS)
+
+    def type_text(self, text: str) -> None:
+        from pynput.keyboard import Controller
+
+        # pynput types via SendInput KEYEVENTF_UNICODE — layout-independent,
+        # reaches anything that accepts WM_CHAR input
+        Controller().type(text)
+
+    def delete_chars(self, count: int) -> None:
+        from pynput.keyboard import Controller, Key
+
+        keyboard = Controller()
+        for i in range(count):
+            keyboard.tap(Key.backspace)
+            if i % 32 == 31:
+                time.sleep(0.01)  # let slow apps drain their input queue
+
     def inject(self, text: str, *, restore_clipboard: bool = True) -> None:
         previous = get_clipboard_text() if restore_clipboard else None
         # transient write (will be restored) → keep it out of Win+V history;

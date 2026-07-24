@@ -1,0 +1,22 @@
+{
+  "id": "http-fetch",
+  "name": "HTTP fetch",
+  "description": "Fetch a web page or API over HTTP(S) and return its readable text content. Use when the user asks about the content of a URL or wants current information from a specific website.",
+  "version": "1.0",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "The full http:// or https:// URL to fetch"
+      }
+    },
+    "required": ["url"]
+  },
+  "entry": "tool.py:run",
+  "timeout_s": 25,
+  "confirm": false,
+  "enabled": true,
+  "builtin": true,
+  "network": true
+}

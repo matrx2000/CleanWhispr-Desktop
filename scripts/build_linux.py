@@ -36,6 +36,7 @@ def main() -> int:
             sys.executable, "-m", "PyInstaller",
             "--noconfirm", "--clean", "--windowed",
             "--name", "CleanWispr",
+            "--add-data", f"{ROOT / 'toolkit' / 'builtin'}:toolkit/builtin",
             "--distpath", str(ROOT / "dist"),
             "--workpath", str(ROOT / "build"),
             "--specpath", str(ROOT / "build"),

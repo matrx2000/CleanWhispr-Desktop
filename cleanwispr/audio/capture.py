@@ -105,6 +105,13 @@ class Recorder:
             raise AudioError(f"Could not open microphone: {exc}") from exc
         log.info("recording started (device=%s)", device_name or "default")
 
+    def snapshot(self) -> np.ndarray:
+        """PCM captured so far, while the recording is still running — for live
+        transcription previews. Safe to call from any thread: the callback only
+        appends to the chunk list, and the copy is taken under the GIL."""
+        chunks = self._chunks[:]
+        return np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.int16)
+
     def stop(self) -> tuple[np.ndarray, GateDecision]:
         stream, self._stream = self._stream, None
         if stream is None:

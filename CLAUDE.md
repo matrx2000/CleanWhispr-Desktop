@@ -25,12 +25,17 @@ cleanwispr/
 ├── core/controller.py  # state machine (AppState, SessionKind)
 ├── audio/              # sounddevice capture (16 kHz mono int16) + silence gate  [M1]
 ├── stt/base.py         # SttEngine contract → whisper_cpp.py [M1], parakeet.py [M4]
+│   └── live.py         # live typing: LocalAgreement-2 commits + reconcile + preview loop
 ├── llm/base.py         # LlmProvider contract → ollama.py [M3], openai_compat.py [later]
+│   └── toolloop.py     # function-calling agent loop (tools → confirm → execute → feed back)
 ├── hotkeys/base.py     # HotkeyBackend contract → pynput_backend.py [M2], wayland/ [M5]
 ├── inject/base.py      # TextInjector contract → windows.py [M1], linux.py [M5]
+│   └── live.py         # LiveTypingSink: streams committed words, focus/modifier/terminal guards
 ├── ui/                 # tray.py, icons.py, settings/window.py, overlay [M1], history [M1]
 └── storage/            # settings.py (pydantic→JSON), db.py (sqlite WAL), paths.py
 ```
+
+Two standalone sibling packages (stdlib core, no `cleanwispr` dependency, own JSON stores in the config dir): **`skillkit/`** — personas/roles ("skills") layered onto LLM prompts; **`toolkit/`** — Python tools the LLM executes via Ollama function calling (`tool.json` + `tool.py` folders, zip import/export, isolated-subprocess runner, built-ins under `toolkit/builtin/` seeded on first run — remember `--add-data` in the build scripts). Model-authored/imported tools always land **disabled**; network tools are additionally gated by the default-off `allow_network` switch.
 
 ### The four contracts (interface seams)
 
@@ -39,7 +44,7 @@ New backends implement these ABCs; nothing else in the app may import a concrete
 - **`stt.base.SttEngine`** — `start(model_id)` pre-warms (server spawn/model load), `transcribe(pcm, language, initial_prompt)` blocking on worker thread. Audio is always 16 kHz mono int16 numpy.
 - **`llm.base.LlmProvider`** — `is_available()`, `list_models()`, `model_info()`, `chat(messages, options) -> Iterator[str]` (streaming). Raise `LlmProviderError` with user-presentable messages.
 - **`hotkeys.base.HotkeyBackend`** — `register(slot, combo, on_press, on_release)`. Slots: `"dictation"`, `"editor"`. Combo format: lowercase `+`-joined (`"ctrl+super"`, `"f8"`). Backends without key-release events (Wayland) set `supports_hold = False`.
-- **`inject.base.TextInjector`** — `inject(text)` = clipboard write + simulated paste (Ctrl+Shift+V in terminals); `capture_selection()` = simulated Ctrl+C with clipboard restore.
+- **`inject.base.TextInjector`** — `inject(text)` = clipboard write + simulated paste (Ctrl+Shift+V in terminals); `capture_selection()` = simulated Ctrl+C with clipboard restore. Optional live-typing capability (`supports_live_typing` + `type_text`/`delete_chars`/`focus_token`/`modifiers_held`/`focus_is_terminal`/`copy_text`): defaults keep paste-only backends unchanged.
 
 ### Settings & data
 

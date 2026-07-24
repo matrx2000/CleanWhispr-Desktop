@@ -1,0 +1,36 @@
+{
+  "id": "create-tool",
+  "name": "Create tool",
+  "description": "Create a NEW tool for this app when the user explicitly asks for one: writes a tool package (manifest + Python code) into the tool library. The new tool starts disabled until the user reviews and enables it in Settings. Only call this when the user asked to create/build a tool.",
+  "version": "1.0",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Short human name of the new tool, e.g. 'Word counter'"
+      },
+      "description": {
+        "type": "string",
+        "description": "One sentence: when should a model call this tool?"
+      },
+      "parameters": {
+        "type": "string",
+        "description": "JSON Schema object for the run() arguments, as a JSON string: {\"type\":\"object\",\"properties\":{...},\"required\":[...]}"
+      },
+      "code": {
+        "type": "string",
+        "description": "Complete Python source of tool.py defining def run(...) -> str (see the authoring reference)"
+      },
+      "network": {
+        "type": "boolean",
+        "description": "true only if the code accesses the internet"
+      }
+    },
+    "required": ["name", "description", "code"]
+  },
+  "native": "create_tool",
+  "confirm": true,
+  "enabled": true,
+  "builtin": true
+}

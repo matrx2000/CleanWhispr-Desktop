@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json as _json
 import logging
+import os
 import shutil
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QLockFile, QObject, Signal
@@ -30,8 +33,10 @@ from cleanwispr.ui.settings.window import SettingsWindow
 from cleanwispr.ui.sounds import SoundPlayer
 from cleanwispr.ui.thinking_panel import ThinkingPanel
 from cleanwispr.ui.tray import TrayManager
-from skillkit import JsonSkillStore, SkillLibrary, default_skills
+from skillkit import JsonSkillStore, Skill, SkillLibrary, default_skills
 from skillkit.qt import SkillPalette, SkillsBridge
+from toolkit import ToolLibrary
+from toolkit.authoring import SKILL_BODY as TOOL_AUTHOR_SKILL_BODY
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +48,48 @@ class _HotkeyBridge(QObject):
     released = Signal(str)
     cancel = Signal()
     show_notes = Signal()  # notes hotkey — opens the Notes window (no recording)
+
+
+class _ToolConfirmUi(QObject):
+    """Answers the controller's tool_confirm requests with a dialog.
+
+    Must be a QObject bound method receiver: the signal is emitted from the
+    pipeline worker, and only a QObject receiver gets the call queued onto the
+    Qt main thread (a plain function would run the dialog on the worker)."""
+
+    def show(self, request) -> None:  # request: llm.toolloop.ToolConfirmRequest
+        try:
+            args_text = _json.dumps(request.args, indent=2, ensure_ascii=False)
+        except (TypeError, ValueError):
+            args_text = str(request.args)
+        if len(args_text) > 1500:
+            args_text = args_text[:1500] + "\n… [truncated]"
+        reply = QMessageBox.question(
+            None,
+            "Allow tool call?",
+            f"The model wants to run the tool “{request.tool.name}”.\n\n"
+            f"Arguments:\n{args_text}\n\nAllow this call?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        request.resolve(reply == QMessageBox.StandardButton.Yes)
+
+
+def _seed_tool_author_skill(skills: SkillLibrary) -> None:
+    """Make sure the built-in 'Tool author' skill exists (also on installs that
+    seeded their skills before the tools feature shipped)."""
+    if skills.get("tool-author") is not None:
+        return
+    skills.add(
+        Skill(
+            id="tool-author",
+            name="Tool author",
+            description="Teaches the model how to create new CleanWispr tools.",
+            body=TOOL_AUTHOR_SKILL_BODY,
+            builtin=True,
+            triggers=["tool author", "tool builder", "toolmaker"],
+        )
+    )
 
 
 def _make_injector():
@@ -103,9 +150,19 @@ def main() -> int:
         seed_enabled=True,
     )
     skills_bridge = SkillsBridge(skills)
+    _seed_tool_author_skill(skills)
+
+    # tools: capabilities the LLM can execute (folders of tool.json + tool.py
+    # under config/tools, exchanged as zips). Built-ins are seeded once.
+    tools = ToolLibrary(paths.config_dir() / "tools")
+    tools.seed_builtins()
 
     engines = {"whisper": WhisperCppEngine(), "parakeet": ParakeetEngine()}
-    controller = Controller(settings, db, Recorder(), engines, _make_injector(), skills=skills)
+    controller = Controller(
+        settings, db, Recorder(), engines, _make_injector(), skills=skills, tools=tools
+    )
+    tool_confirm_ui = _ToolConfirmUi()
+    controller.tool_confirm.connect(tool_confirm_ui.show)
 
     def on_settings_changed() -> None:
         settings_store.save(settings)
@@ -117,6 +174,16 @@ def main() -> int:
     hotkeys = PynputBackend()
 
     tray = TrayManager(controller, on_open_settings=None)  # wired below
+
+    def request_quit() -> None:
+        """Tray → Quit: hide every window immediately (instant feedback — a
+        frozen-looking window is what 'the app won't close' feels like), then
+        end the event loop."""
+        for widget in QApplication.topLevelWidgets():
+            widget.hide()
+        app.exit(0)
+
+    tray.set_on_quit(request_quit)
 
     def apply_hotkeys() -> None:
         """(Re)register every slot from current settings — startup and live changes.
@@ -208,6 +275,7 @@ def main() -> int:
         on_run_setup=open_setup_guide,
         skills=skills,
         skills_bridge=skills_bridge,
+        tools=tools,
     )
     controller.history_changed.connect(settings_window.history_tab.refresh)
     tray.set_open_settings(_show(settings_window))
@@ -250,6 +318,22 @@ def main() -> int:
 
     exit_code = app.exec()
     cleanup()
+    # Failsafe: the interpreter joins non-daemon worker threads at exit, so one
+    # stuck call (an Ollama request mid-stream, a download) would keep a ghost
+    # process alive — with any open window left frozen on screen. Log the
+    # culprit and end the process; everything above already cleaned up.
+    lingering = [
+        t
+        for t in threading.enumerate()
+        if t is not threading.main_thread() and not t.daemon and t.is_alive()
+    ]
+    if lingering:
+        log.warning(
+            "forcing process exit; worker threads still busy: %s",
+            [t.name for t in lingering],
+        )
+        logging.shutdown()
+        os._exit(exit_code)
     return exit_code
 
 

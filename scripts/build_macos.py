@@ -24,6 +24,7 @@ def main() -> int:
             sys.executable, "-m", "PyInstaller",
             "--noconfirm", "--clean", "--windowed",
             "--name", "CleanWispr",
+            "--add-data", f"{ROOT / 'toolkit' / 'builtin'}:toolkit/builtin",
             "--osx-bundle-identifier", "com.cleanwispr.app",
             "--distpath", str(ROOT / "dist"),
             "--workpath", str(ROOT / "build"),

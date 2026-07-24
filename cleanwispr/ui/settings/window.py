@@ -38,6 +38,7 @@ from cleanwispr.ui.settings.history_tab import HistoryTab
 from cleanwispr.ui.settings.hotkeys_tab import HotkeysTab
 from cleanwispr.ui.settings.notes_tab import NotesTab
 from cleanwispr.ui.settings.skills_tab import SkillsTab
+from cleanwispr.ui.settings.tools_tab import ToolsTab
 from cleanwispr.ui.settings.transcription_tab import TranscriptionTab
 from cleanwispr.ui.widgets import ACCENT_SOFT, LabeledToggle, PathLink
 
@@ -175,6 +176,7 @@ class SettingsWindow(QMainWindow):
         on_run_setup: Callable[[], None] | None = None,
         skills=None,
         skills_bridge=None,
+        tools=None,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} Settings")
@@ -186,6 +188,8 @@ class SettingsWindow(QMainWindow):
         self._notes_dir_changed_cb: Callable[[], None] | None = None
         self.skills_tab: SkillsTab | None = None
         self._skills_tab_index = -1
+        self.tools_tab: ToolsTab | None = None
+        self._tools_tab_index = -1
 
         # ordered by how a new user sets things up: engine → editor → triggers → mic
         tabs = QTabWidget()
@@ -198,6 +202,9 @@ class SettingsWindow(QMainWindow):
         if skills is not None and skills_bridge is not None:
             self.skills_tab = SkillsTab(settings, skills, skills_bridge)
             self._skills_tab_index = tabs.addTab(_scrollable(self.skills_tab), "Skills")
+        if tools is not None:
+            self.tools_tab = ToolsTab(tools)
+            self._tools_tab_index = tabs.addTab(_scrollable(self.tools_tab), "Tools")
         tabs.addTab(
             _scrollable(HotkeysTab(settings, on_settings_changed, on_hotkeys_changed)),
             "Hotkeys",
@@ -440,6 +447,8 @@ class SettingsWindow(QMainWindow):
         self.editor_tab.refresh()
         if self.skills_tab is not None:
             self.skills_tab.refresh()
+        if self.tools_tab is not None:
+            self.tools_tab.refresh()
 
     def closeEvent(self, event) -> None:  # Qt override, keeps Qt naming
         # closing the window hides it; the app lives in the tray

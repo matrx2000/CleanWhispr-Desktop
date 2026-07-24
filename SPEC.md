@@ -36,6 +36,7 @@ Flow: hotkey → capture mic audio (16 kHz mono PCM) → local STT engine → in
 - **Languages**: full Whisper set (58+ languages incl. `auto`), passed to the engine per-request. Parakeet models expose their own language sets (25 for `parakeet-tdt-0.6b-v3`).
 - **Custom dictionary**: user word/phrase list passed as Whisper `initial_prompt` to bias recognition.
 - **Transcript normalization**: engines return text split into timed segments joined by newlines that fall mid-sentence (whisper.cpp especially); a shared `stt.base.normalize_transcript` collapses whitespace runs so output is flowing prose, not stray line breaks. Applied by every engine before returning a result.
+- **Live typing** (`stt.live` + `inject.live`, on by default, toggle in Settings → Transcription): while recording, the engine re-transcribes the growing take on a background thread and words are typed into the target app as soon as **two consecutive hypotheses agree** on them (the LocalAgreement-2 policy from UFAL's whisper_streaming — agreement filters both word flicker and silence hallucinations, so committed text almost never needs revising). When the take ends, the authoritative full-recording transcript corrects the preview **in place** with a minimal backspace-and-retype delta (`reconcile`, the nerd-dictation technique). Safety rules learned from the injection-failure survey: typing pauses while modifier keys are physically held; the focused window is fingerprinted on the first keystroke and typing **freezes** if focus changes (final text then lands on the clipboard instead); newlines are never typed; terminals are skipped entirely (synthetic backspaces go through the shell's line editor) and fall back to the classic paste; silence-only buffers never reach the engine. The preview loop is serial — a slow engine lowers the preview rate instead of piling up requests — and the final transcription waits for any in-flight preview request. Backends without keystroke primitives (`supports_live_typing = False`, e.g. Wayland) keep the classic paste-once behaviour unchanged.
 
 ### F2 — Voice Editor (voice instruction → LLM edit of selected text)
 
@@ -67,6 +68,17 @@ A modular layer between the UI and the LLM that flavours the voice editor (F2) a
 - **Built-ins**, seeded on first run only: Formal, Concise, Friendly, Poet, and **Tables** (teaches GitHub-flavoured Markdown pipe-table syntax so tables render correctly in Notes via Qt's `setMarkdown`). The feature ships **enabled with Tables active** by default; the master switch off makes it a pure no-op.
 - **Controller wiring**: `core.controller._run_edit` runs the voice switch, then resolves `active_skills("editor")`; `_run_notes_ai` resolves `active_skills("notes")` (no voice switch). Both apply per-skill temperature/model overrides. The controller imports only the pure `skillkit` core — never the Qt UI, preserving the seam discipline.
 
+### F5 — Tools (Python capabilities the LLM can execute)
+
+Skills say HOW the model writes; **tools are WHAT it can do**. A tool is a folder — `tool.json` (manifest with an OpenAI/Ollama-style JSON-Schema `parameters` object) plus a `tool.py` whose `run(**args) -> str` does the work — that the voice editor's LLM calls through **Ollama native function calling** (`/api/chat` `tools` array; `tool_calls` stream back with `arguments` already parsed; results return as `role:"tool"` messages with `tool_name`). Implemented as a **standalone package** `toolkit/` (repo root, sibling to `skillkit/`), stdlib-only, host-agnostic.
+
+- **Library** (`toolkit.ToolLibrary`): tools live under `<config_dir>/tools/<tool-id>/`; state (master switch, per-call confirmation, web-access switch, per-tool enable flags, round budget) persists in `<config_dir>/tools.json`. **Import/export as .zip** (zip-slip-guarded, size-capped) — the same exchange story as skills. Imported tools land **disabled** until the user reviews and enables them.
+- **Execution** (`toolkit.runner`): arguments are validated/coerced against the manifest schema, then the entry function runs in an isolated `python -I` **subprocess** with a hard timeout and an output cap (restricted-builtins tricks are not a boundary; a subprocess is — per the sandboxing survey; frozen builds fall back to a soft-timeout thread). Tool errors come back as strings the model can read and adapt to.
+- **Tool loop** (`cleanwispr.llm.toolloop.run_tool_loop`): model turn → tool calls → confirm → execute → results fed back → repeat, with a hard round budget (then the model must answer without tools). Tool availability is **capability-gated per model** (`/api/show` capabilities contains `"tools"` — qwen3/llama3.1/mistral/gemma4 yes, gemma3/gemma3n no; a one-time notice explains when the selected model can't use tools). Results are fenced and labelled as DATA (spotlighting) so fetched content can't easily steer the model — the real boundaries are the switches below.
+- **Safety gates**: master **enable** switch; per-tool enable switches; **confirm-before-run** (per-tool `confirm` flag — Run Python asks every time — plus an optional ask-for-everything mode; the worker blocks on a Qt dialog, timeout = denied); and a separate **web-access master switch, off by default**, gating every tool whose manifest declares `network: true`, with a prominent prompt-injection warning in Settings → Tools (a fetched page can carry hidden instructions that hijack a small local model — the "lethal trifecta" risk).
+- **Built-ins** (seeded once, re-seeded only if deleted): **HTTP fetch** (urllib + html.parser page-to-text, network-gated), **Run Python** (executes a model-written snippet in the sandbox, confirm-gated), and **Create tool** (a *native* tool: the model can build new tools on request — manifest + code written into the library, **always created disabled** so model-authored code never runs before the user reviewed and enabled it in Settings → Tools).
+- **Authoring knowledge** (`toolkit.authoring`): the full TOOL AUTHORING REFERENCE is injected as a system message whenever Create tool is armed, and a condensed version ships as the built-in **Tool author** skill (seeded for existing installs too), so the how-to is visible and editable where personas are managed.
+
 ## 4. Architecture
 
 Single Python process + PySide6 event loop; heavy work (audio capture, inference calls, DB writes) on worker threads (`QThread`/`concurrent.futures`) so the UI and hotkey handling never block. Local inference servers run as managed child processes.
@@ -83,13 +95,15 @@ cleanwispr/
 │   └── gate.py             # silence/speech gate (RMS/peak)
 ├── stt/
 │   ├── base.py             # SttEngine interface: start(), stop(), transcribe(pcm, language, prompt)
+│   ├── live.py             # live typing (F1): LocalAgreement-2 commits + reconcile + preview loop
 │   ├── whisper_cpp.py      # manages bundled whisper-server binary (HTTP, CUDA/Vulkan/CPU fallback)
 │   ├── parakeet.py         # sherpa-onnx Python bindings (NVIDIA Parakeet/Nemotron ONNX models)
 │   ├── registry.py         # model catalog (ported from openwhispr modelRegistryData.json)
 │   └── downloader.py       # model + binary downloads with progress, resume, checksums
 ├── llm/
 │   ├── base.py             # LlmProvider interface: list_models(), model_info(), chat(messages, options)
-│   ├── ollama.py           # Ollama REST: /api/tags, /api/show, /api/chat (streaming)
+│   ├── ollama.py           # Ollama REST: /api/tags, /api/show, /api/chat (streaming + function calling)
+│   ├── toolloop.py         # tool loop (F5): calls → confirm → execute → results → next turn
 │   ├── openai_compat.py    # (later) generic OpenAI-compatible endpoint → LM Studio, llama.cpp, vLLM
 │   └── prompts.py          # editor system prompts (edit / generate / whole_note)
 ├── hotkeys/
@@ -97,7 +111,8 @@ cleanwispr/
 │   ├── pynput_backend.py   # Windows + Linux/X11 (low-level hooks; true key-down/key-up for hold mode)
 │   └── wayland/            # (later) GNOME gsettings+D-Bus, KDE KGlobalAccel, Hyprland hyprctl
 ├── inject/
-│   ├── base.py             # TextInjector interface: inject(text), capture_selection()
+│   ├── base.py             # TextInjector interface: inject(text), capture_selection(), live-typing primitives
+│   ├── live.py             # LiveTypingSink (F1): commits → keystrokes, focus/modifier/terminal guards
 │   ├── windows.py          # clipboard + SendInput Ctrl+V; terminal detection → Ctrl+Shift+V
 │   └── linux.py            # clipboard (wl-copy/xclip) + xdotool → wtype → ydotool fallback chain
 ├── ui/
@@ -121,6 +136,14 @@ cleanwispr/
 > (voice switch + skill resolution), `ui/settings/skills_tab.py` (embeds the
 > manager), `ui/tray.py` (submenu), and `app.py` (store/library/bridge/palette
 > wiring). See `skillkit/README.md` for the public API and integration guide.
+
+> **Tools (F5)** follow the same pattern in a **separate top-level package
+> `toolkit/`** (sibling to `skillkit/`): stdlib-only `models` / `library` /
+> `runner` / `authoring`, plus packaged built-in tools under `toolkit/builtin/`.
+> It has no dependency on `cleanwispr`; the app wires it through
+> `llm/toolloop.py` (the agent loop), `core/controller.py` (arming + confirm
+> bridge), `ui/settings/tools_tab.py` (manager UI), and `app.py` (library +
+> seeding + confirm dialog).
 
 ### Key design decisions (and what they inherit from OpenWhispr)
 
@@ -207,7 +230,8 @@ Location: `platformdirs` user config dir (`%LOCALAPPDATA%/CleanWispr/config.json
     "language": "auto",
     "custom_dictionary": [],
     "gpu": "auto",                     // auto | cuda | vulkan | cpu
-    "models_dir": ""                   // custom model download folder; empty = default cache dir
+    "models_dir": "",                  // custom model download folder; empty = default cache dir
+    "live_typing": true                // stream stable words into the target app while speaking (F1)
   },
   "llm": {
     "provider": "ollama",
@@ -225,20 +249,23 @@ No secrets are stored (no API keys exist in a local-only app), so no keyring/enc
 
 **Skills store (F4).** The skills library persists **separately** in `<config_dir>/skills.json` — `{ "version", "config": { "enabled", "active_ids", "voice_switching", "accept_threshold", "margin", "max_words" }, "items": [ Skill… ] }` — deliberately *not* inside `config.json`, so the portable `skillkit` package owns its own storage (via a `SkillStore` seam) and a user's skills move/back up as a single file. Same atomic-write + corrupt→`.bak` safety as `config.json`.
 
+**Tools store (F5).** Same pattern: tool folders live under `<config_dir>/tools/<tool-id>/` (`tool.json` + `tool.py`), and the library state persists in `<config_dir>/tools.json` — `{ "version", "config": { "enabled", "confirm_all", "allow_network", "max_rounds" }, "tools": { "<id>": { "enabled" } } }`. The `toolkit` package owns its own storage; a tool travels as a zip of its folder.
+
 ## 6. Settings UI (PySide6 window)
 
 Tabs (ordered by how a new user sets things up; the window is resizable down to
 small laptop screens and every tab scrolls):
 
-1. **Transcription** — engine picker (whisper/parakeet); card-style model manager (download/delete/use, ACTIVE badge, inline progress, **cancel**); engine-build manager (CPU/CUDA/Vulkan) with GPU backend selector and **GPU auto-detection** that marks the recommended build for the detected accelerator; **model storage location** picker (any folder/disk, default = user cache dir); language dropdown; custom dictionary editor.
+1. **Transcription** — engine picker (whisper/parakeet); card-style model manager (download/delete/use, ACTIVE badge, inline progress, **cancel**); engine-build manager (CPU/CUDA/Vulkan) with GPU backend selector and **GPU auto-detection** that marks the recommended build for the detected accelerator; **model storage location** picker (any folder/disk, default = user cache dir); language dropdown; custom dictionary editor; **live typing** toggle (stream words into the target app while speaking, F1).
 2. **Voice Editor (LLM)** — provider selector (Ollama; extensible); **auto-detected list of installed Ollama models** with parameter size/quantization/context info from `/api/show`; **hardware-aware recommendation** (Best-quality / Smallest-usable buttons) and a **searchable model library** (filter across families) installable in-app with progress + cancel (plus the paste-`ollama pull` box for installing anything by exact name); context window (`num_ctx`), temperature, keep-alive; base URL; "Test connection" / "Start Ollama" buttons; prompt preview/override (advanced).
-3. **Skills** — reusable LLM roles (F4): master **Enable skills** + **Allow voice switching** toggles; a list with add / duplicate / delete and a **width slider** (for long names); an editor for name, description, persona body, voice triggers, scope (voice editor / Notes / both), per-skill temperature + model override, and enable/activate; a **Test skill** button (runs a sample through the model to preview the persona); and **import/export** skills as JSON to exchange them. Built-in skills (Formal / Concise / Friendly / Poet / **Tables**) are read-only — duplicate to edit. Backed by the standalone `skillkit` manager widget.
-4. **Hotkeys** — key-capture widget per slot (dictation, editor, notes), activation mode selector per slot (the notes slot just opens the window, so no mode), conflict validation across all slots in priority order (dictation > editor > notes).
-5. **Microphone** — input device picker with live level meter; audio retention toggle + folder (clickable path) + purge.
-6. **Notes** — vault manager: add/remove vaults, mark the active one, reveal in file manager. Changing vaults live-reloads the open Notes window.
-7. **History** — history-logging on/off toggle + the browser from §5.
-8. **General** — sounds toggle, start-on-login, overlay position, verbose logging, open settings/log folder, clickable data paths, **Clear app data** (confirmed full factory reset: settings, history, logs, models, binaries — then quit).
-9. **About** — version, author, and every third-party project with verified links and licenses (incl. OpenWhispr MIT attribution).
+3. **Skills** — reusable LLM roles (F4): master **Enable skills** + **Allow voice switching** toggles; a list with add / duplicate / delete and a **width slider** (for long names); an editor for name, description, persona body, voice triggers, scope (voice editor / Notes / both), per-skill temperature + model override, and enable/activate; a **Test skill** button (runs a sample through the model to preview the persona); and **import/export** skills as JSON to exchange them. Built-in skills (Formal / Concise / Friendly / Poet / **Tables** / **Tool author**) are read-only — duplicate to edit. Backed by the standalone `skillkit` manager widget.
+4. **Tools** — LLM capabilities (F5): master **Let the model use tools** + **Ask before every tool call** toggles; a separate **Allow tools that access the internet** switch (off by default) with a prominent prompt-injection/exfiltration warning; a row per installed tool (enable toggle, built-in / 🌐 web / asks-first badges, export, delete); **Import tool (.zip)** (imported tools land disabled until reviewed) and **Open tools folder**.
+5. **Hotkeys** — key-capture widget per slot (dictation, editor, notes), activation mode selector per slot (the notes slot just opens the window, so no mode), conflict validation across all slots in priority order (dictation > editor > notes).
+6. **Microphone** — input device picker with live level meter; audio retention toggle + folder (clickable path) + purge.
+7. **Notes** — vault manager: add/remove vaults, mark the active one, reveal in file manager. Changing vaults live-reloads the open Notes window.
+8. **History** — history-logging on/off toggle + the browser from §5.
+9. **General** — sounds toggle, start-on-login, overlay position, verbose logging, open settings/log folder, clickable data paths, **Clear app data** (confirmed full factory reset: settings, history, logs, models, binaries — then quit).
+10. **About** — version, author, and every third-party project with verified links and licenses (incl. OpenWhispr MIT attribution).
 
 Folder paths shown anywhere in Settings are clickable links that open the
 folder in the system file manager after a confirmation prompt.

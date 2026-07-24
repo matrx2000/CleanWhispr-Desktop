@@ -24,6 +24,9 @@ def main() -> int:
             "--noconfirm", "--clean", "--windowed",
             "--name", "CleanWispr",
             "--icon", str(icon),
+            # built-in tools are data (tool.json + tool.py loaded by path),
+            # not imported modules — PyInstaller won't collect them by itself
+            "--add-data", f"{ROOT / 'toolkit' / 'builtin'};toolkit/builtin",
             "--distpath", str(ROOT / "dist"),
             "--workpath", str(ROOT / "build"),
             "--specpath", str(ROOT / "build"),

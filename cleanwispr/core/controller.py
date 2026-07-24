@@ -23,6 +23,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from cleanwispr.audio.capture import AudioError, Recorder
 from cleanwispr.inject.base import InjectError, TextInjector
+from cleanwispr.inject.live import LiveResult, LiveTypingSink
 from cleanwispr.llm import factory as llm_factory
 from cleanwispr.llm import server as ollama_server
 from cleanwispr.llm.base import LlmProviderError
@@ -32,10 +33,12 @@ from cleanwispr.llm.prompts import (
     build_whole_note_messages,
     clean_llm_output,
 )
+from cleanwispr.llm.toolloop import ToolConfirmRequest, run_tool_loop
 from cleanwispr.storage import paths
 from cleanwispr.storage.db import HistoryDb
 from cleanwispr.storage.settings import ActivationMode, Settings
 from cleanwispr.stt.base import SAMPLE_RATE, SttError
+from cleanwispr.stt.live import LiveTranscriber
 from cleanwispr.stt.whisper_cpp import WhisperCppEngine
 from skillkit import voice
 from skillkit.library import SkillLibrary
@@ -95,6 +98,9 @@ class Controller(QObject):
     history_changed = Signal()
     notes_text_ready = Signal(str)  # transcribed dictation → the Notes editor
     notes_ai_ready = Signal(object)  # (result, mode) AI take → the Notes editor
+    # a ToolConfirmRequest the UI must answer (queued to the main thread); the
+    # worker blocks on request.wait() and treats a timeout as "denied"
+    tool_confirm = Signal(object)
 
     _outcome_ready = Signal(object)  # _PipelineOutcome, worker → main thread
     _stage_changed = Signal(AppState)  # mid-pipeline state updates from the worker
@@ -107,6 +113,7 @@ class Controller(QObject):
         engine: WhisperCppEngine | dict,
         injector: TextInjector,
         skills: SkillLibrary | None = None,
+        tools=None,  # toolkit.ToolLibrary | None — optional, like skills
     ) -> None:
         super().__init__()
         self.settings = settings
@@ -114,6 +121,8 @@ class Controller(QObject):
         # the skills layer is optional and self-contained; a disabled in-memory
         # library keeps the feature a pure no-op when the host doesn't wire one
         self._skills = skills or SkillLibrary(MemorySkillStore())
+        self._tools = tools
+        self._tools_notice_shown: set[str] = set()  # once-per-model "no tools" notice
         self._recorder = recorder
         # engine: a single SttEngine (used for every stt.engine setting) or a
         # dict of {"whisper": ..., "parakeet": ...}
@@ -127,6 +136,10 @@ class Controller(QObject):
         self._notes_ai_source: str = ""
         self._notes_ai_mode: str = NOTES_MODE_GENERATE
         self._notes_ai_images: list[str] = []  # base64 images from the selection (vision)
+        # live-typing preview for the current dictation take (M-live)
+        self._live: LiveTranscriber | None = None
+        self._live_sink: LiveTypingSink | None = None
+        self._live_take: tuple[LiveTranscriber | None, LiveTypingSink | None] = (None, None)
         self._outcome_ready.connect(self._on_outcome)
         self._stage_changed.connect(self._set_state)
         # abort takes where the mic never delivers audio (dead/slow BT endpoints)
@@ -220,6 +233,7 @@ class Controller(QObject):
         if self._state is AppState.RECORDING:
             self._mic_watchdog.stop()
             self._recorder.abort()
+            self._discard_live_preview()
             self._session_kind = None
             self._set_state(AppState.IDLE)
             self.notice.emit("Recording cancelled")
@@ -246,6 +260,8 @@ class Controller(QObject):
 
     def shutdown(self) -> None:
         self._recorder.abort()
+        if self._live is not None:
+            self._live.request_stop()
         self._executor.shutdown(wait=False, cancel_futures=True)
         for engine in self._engines.values():
             engine.stop()
@@ -264,12 +280,73 @@ class Controller(QObject):
             self._fail(str(exc))
             return
         self._session_kind = kind
+        if kind is SessionKind.DICTATION:
+            self._maybe_start_live_preview()
         self._mic_watchdog.start()
         self._set_state(AppState.RECORDING)
+
+    # --- live-typing preview (dictation only) ---
+
+    def _maybe_start_live_preview(self) -> None:
+        """Start the streaming preview when the setting is on, the injector can
+        type, and the target is not a terminal (where synthetic backspaces go
+        through the shell's line editor instead of editing text)."""
+        if not self.settings.stt.live_typing:
+            return
+        injector = self._injector
+        if not getattr(injector, "supports_live_typing", False):
+            return
+        try:
+            if injector.focus_is_terminal():
+                log.info("live typing skipped: focused window is a terminal")
+                return
+        except Exception:
+            log.exception("terminal detection failed; skipping live typing")
+            return
+        settings = self.settings.model_copy(deep=True)
+        stt = settings.stt
+        engine, model_id = self._active_engine(settings)
+        prompt = ", ".join(stt.custom_dictionary) or None
+
+        def transcribe(pcm) -> str:
+            engine.ensure(model_id, stt.language, stt.gpu)
+            return engine.transcribe(pcm, language=stt.language, initial_prompt=prompt).text
+
+        sink = LiveTypingSink(injector)
+        self._live_sink = sink
+        self._live = LiveTranscriber(self._recorder.snapshot, transcribe, sink)
+        self._live.start()
+        log.info("live preview started (%s:%s)", stt.engine, model_id)
+
+    def _take_live_preview(self) -> None:
+        """Move the running preview into the pending take (consumed by
+        _run_dictation on the worker) and stop producing new commits."""
+        live, sink = self._live, self._live_sink
+        self._live = self._live_sink = None
+        if live is not None:
+            live.request_stop()
+        self._live_take = (live, sink)
+
+    def _discard_live_preview(self) -> None:
+        """Abort the preview and erase anything it typed (cancelled/empty take).
+        The join and the backspaces run on the worker — never the Qt thread."""
+        live, sink = self._live, self._live_sink
+        self._live = self._live_sink = None
+        if live is None:
+            return
+        live.request_stop()
+
+        def cleanup() -> None:
+            live.finish()
+            if sink is not None:
+                sink.rollback()
+
+        self._executor.submit(cleanup)
 
     def _on_mic_timeout(self) -> None:
         if self._state is AppState.RECORDING:
             self._recorder.abort()
+            self._discard_live_preview()
             self._session_kind = None
             self._set_state(AppState.IDLE)
             self.notice.emit(
@@ -283,16 +360,19 @@ class Controller(QObject):
         self._mic_watchdog.stop()
         pcm, decision = self._recorder.stop()
         if decision.skip:
+            self._discard_live_preview()
             self._session_kind = None
             self._set_state(AppState.IDLE)
             self.notice.emit("No speech detected")
             return
         if len(pcm) < self._MIN_AUDIO_SAMPLES:
             # e.g. a Bluetooth mic still connecting when the take ended
+            self._discard_live_preview()
             self._session_kind = None
             self._set_state(AppState.IDLE)
             self.notice.emit("Almost no audio captured — was the microphone ready?")
             return
+        self._take_live_preview()
         self._set_state(AppState.TRANSCRIBING)
         settings_snapshot = self.settings.model_copy(deep=True)
         kind = self._session_kind or SessionKind.DICTATION
@@ -370,10 +450,19 @@ class Controller(QObject):
             options.model = model
 
     def _run_dictation(self, pcm, settings: Settings) -> None:
+        live, sink = self._live_take
+        self._live_take = (None, None)
+        if live is not None:
+            # wait out any in-flight preview request so the final transcription
+            # never races it on the engine
+            live.finish()
         result = self._transcribe(pcm, settings)
         if result is None:
-            return
-        if not result.text:
+            return  # engine error; leave any preview text in place — it is real speech
+        # if the final pass returns nothing but stable words were already typed,
+        # the committed preview is the best transcript we have — keep it
+        final_text = result.text or (sink.typed if sink is not None else "")
+        if not final_text:
             self._outcome_ready.emit(_PipelineOutcome(ok=False, message="Nothing transcribed"))
             return
 
@@ -383,14 +472,39 @@ class Controller(QObject):
 
         outcome = _PipelineOutcome(
             ok=True,
-            text=result.text,
+            text=final_text,
             language=result.language,
             engine=f"{settings.stt.engine}:{self._active_engine(settings)[1]}",
             duration_ms=result.duration_ms,
             audio_path=audio_path,
         )
-        self._inject_into_outcome(result.text, settings, outcome)
+        self._settle_dictation_screen(sink, final_text, settings, outcome)
         self._outcome_ready.emit(outcome)
+
+    def _settle_dictation_screen(
+        self, sink: LiveTypingSink | None, final_text: str, settings: Settings, outcome
+    ) -> None:
+        """Get the final text on screen: correct the live preview in place when
+        there is one, paste classically otherwise, clipboard fallback when the
+        preview lost its window."""
+        if sink is None:
+            self._inject_into_outcome(final_text, settings, outcome)
+            return
+        live_result = sink.finalize(final_text)
+        if live_result is LiveResult.DONE:
+            return  # screen already shows exactly final_text
+        if live_result is LiveResult.UNTOUCHED:
+            self._inject_into_outcome(final_text, settings, outcome)
+            return
+        # FROZEN: focus moved mid-preview — never type into the new window
+        try:
+            self._injector.copy_text(final_text)
+            outcome.message = (
+                "Focus changed during live typing — the full text is on the clipboard"
+            )
+        except Exception:
+            log.exception("clipboard fallback failed")
+            outcome.message = "Focus changed during live typing and the clipboard copy failed"
 
     def _run_edit(self, pcm, settings: Settings) -> None:
         """Editor session: the transcript is an instruction. Capture the selected
@@ -452,7 +566,7 @@ class Controller(QObject):
                 messages = build_edit_messages(instruction, selection, active_skills)
             else:
                 messages = build_generate_messages(instruction, active_skills)
-            edited = clean_llm_output(self._stream_with_status(provider, messages, options))
+            edited = clean_llm_output(self._chat_leg(provider, messages, options))
         except LlmProviderError as exc:
             self._outcome_ready.emit(
                 _PipelineOutcome(ok=False, kind=SessionKind.EDIT, message=str(exc))
@@ -546,7 +660,7 @@ class Controller(QObject):
             else:
                 messages = build_generate_messages(instruction, active_skills)
             self._attach_notes_images(messages, provider, options.model)
-            edited = clean_llm_output(self._stream_with_status(provider, messages, options))
+            edited = clean_llm_output(self._chat_leg(provider, messages, options))
         except LlmProviderError as exc:
             self._outcome_ready.emit(
                 _PipelineOutcome(ok=False, kind=SessionKind.EDIT, message=str(exc))
@@ -589,10 +703,48 @@ class Controller(QObject):
         parts.append("---\n\n")
         return "".join(parts)
 
-    def _stream_with_status(self, provider, messages, options) -> str:
-        """Consume the LLM stream while narrating what Ollama is doing: an
-        explicit load phase with a live seconds counter when the model is cold,
-        then thinking/writing progress."""
+    def _chat_leg(self, provider, messages, options) -> str:
+        """The LLM leg shared by editor and Notes-AI sessions: narrate model
+        load, then stream — through the tool loop when tools are armed and the
+        model supports function calling, plain streaming otherwise."""
+        library = self._tools
+        if library is not None and library.config.enabled and library.armed_specs():
+            try:
+                tools_ok = provider.supports_tools(options.model)
+            except Exception:
+                log.exception("tool capability check failed")
+                tools_ok = False
+            if tools_ok:
+                self._prepare_model(provider, options)
+                on_thinking, on_content = self._narration_callbacks(options)
+                return run_tool_loop(
+                    provider,
+                    messages,
+                    options,
+                    library,
+                    on_status=self.edit_status.emit,
+                    on_thinking=on_thinking,
+                    on_content=on_content,
+                    request_confirm=self._request_tool_confirm,
+                )
+            if options.model not in self._tools_notice_shown:
+                self._tools_notice_shown.add(options.model)
+                self.notice.emit(
+                    f"{options.model} doesn't support tools — running without them "
+                    "(qwen3 and llama3.1 do)"
+                )
+        return self._stream_with_status(provider, messages, options)
+
+    def _request_tool_confirm(self, spec, args: dict) -> bool:
+        """Worker-side confirmation: hand the question to the UI thread and
+        block until answered (timeout ⇒ denied, so headless runs stay safe)."""
+        request = ToolConfirmRequest(tool=spec, args=args)
+        self.tool_confirm.emit(request)
+        return request.wait(timeout_s=120)
+
+    def _prepare_model(self, provider, options) -> None:
+        """Narrated model warm-up: an explicit load phase with a live seconds
+        counter when the model is cold."""
         loaded = provider.is_model_loaded(options.model)
         if loaded is False:
             self._load_model_with_ticker(provider, options)
@@ -602,23 +754,33 @@ class Controller(QObject):
         else:
             self.edit_status.emit(f"Waiting for {options.model}…")
 
-        thinking_started = False
+    def _narration_callbacks(self, options):
+        """(on_thinking, on_content) that keep the overlay pill narrated."""
+        state = {"thinking": False, "chunks": 0, "chars": 0}
 
         def on_thinking(text: str) -> None:
             # full reasoning streams to the thinking panel; the pill stays compact
-            nonlocal thinking_started
-            if not thinking_started:
-                thinking_started = True
+            if not state["thinking"]:
+                state["thinking"] = True
                 self.edit_status.emit(f"💭 {options.model} thinking…")
             self.edit_thinking.emit(text)
 
+        def on_content(chunk: str) -> None:
+            state["chunks"] += 1
+            state["chars"] += len(chunk)
+            if state["chunks"] == 1 or state["chunks"] % 20 == 0:
+                self.edit_status.emit(f"{options.model}: writing… {state['chars']} chars")
+
+        return on_thinking, on_content
+
+    def _stream_with_status(self, provider, messages, options) -> str:
+        """Consume the plain (tool-less) LLM stream with narration."""
+        self._prepare_model(provider, options)
+        on_thinking, on_content = self._narration_callbacks(options)
         chunks: list[str] = []
-        received = 0
         for chunk in provider.chat(messages, options, on_thinking=on_thinking):
             chunks.append(chunk)
-            received += len(chunk)
-            if len(chunks) == 1 or len(chunks) % 20 == 0:
-                self.edit_status.emit(f"{options.model}: writing… {received} chars")
+            on_content(chunk)
         return "".join(chunks)
 
     def _load_model_with_ticker(self, provider, options) -> None:

@@ -6,15 +6,18 @@ import numpy as np
 import pytest
 
 from cleanwispr.stt import registry
-from cleanwispr.stt.downloader import DownloadError, extract_binary_from_zip
 from cleanwispr.stt.base import normalize_transcript
+from cleanwispr.stt.downloader import DownloadError, extract_binary_from_zip
 from cleanwispr.stt.languages import LANGUAGES
 from cleanwispr.stt.whisper_cpp import pcm_to_wav_bytes
 
 
 def test_normalize_transcript_collapses_segment_newlines():
     # whisper.cpp joins timed segments with newlines that fall mid-sentence
-    raw = "How this thing is formatting my text, because it feels like\nit's breaking it into wrong\nformats."
+    raw = (
+        "How this thing is formatting my text, because it feels like\n"
+        "it's breaking it into wrong\nformats."
+    )
     assert normalize_transcript(raw) == (
         "How this thing is formatting my text, because it feels like "
         "it's breaking it into wrong formats."

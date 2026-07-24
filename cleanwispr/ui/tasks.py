@@ -15,12 +15,18 @@ and those methods re-emit the public signals from the main thread.
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from threading import Event
+from threading import Event, Thread
 
 from PySide6.QtCore import QObject, Signal
 
-_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ui-task")
+# Plain daemon threads, NOT a ThreadPoolExecutor: the interpreter joins
+# executor workers at exit, so one task stuck in a slow network call would
+# keep the whole process (and any frozen window) alive after Quit. A UI task
+# dying with the process is always acceptable.
+
+
+def _spawn(target: Callable[[], None], name: str) -> None:
+    Thread(target=target, daemon=True, name=name).start()
 
 
 class DownloadTask(QObject):
@@ -47,7 +53,7 @@ class DownloadTask(QObject):
         self._worker_failed.connect(self._relay_failed)
 
     def start(self) -> None:
-        _executor.submit(self._run)
+        _spawn(self._run, "ui-download")
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -88,7 +94,7 @@ class AsyncTask(QObject):
         self._worker_failed.connect(self._relay_failed)
 
     def start(self) -> None:
-        _executor.submit(self._run)
+        _spawn(self._run, "ui-task")
 
     def _run(self) -> None:  # worker thread
         try:

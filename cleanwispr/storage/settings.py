@@ -51,6 +51,10 @@ class SttSettings(BaseModel):
     custom_dictionary: list[str] = Field(default_factory=list)
     gpu: str = "auto"  # auto | cuda | vulkan | cpu
     models_dir: str = ""  # custom model download folder; empty = default cache dir
+    # live typing: stream stable words into the target app while still speaking
+    # (dictation only; skipped automatically in terminals / on backends without
+    # keystroke support). The final transcript corrects the preview in place.
+    live_typing: bool = True
 
 
 class OllamaSettings(BaseModel):

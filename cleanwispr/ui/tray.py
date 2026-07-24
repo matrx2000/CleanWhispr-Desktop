@@ -58,8 +58,9 @@ class TrayManager:
 
         menu.addSeparator()
         quit_action = QAction("Quit")
-        quit_action.triggered.connect(QApplication.instance().quit)
+        quit_action.triggered.connect(self._quit)
         menu.addAction(quit_action)
+        self._on_quit: Callable[[], None] | None = None
 
         # keep references — QMenu/QAction are not owned by the C++ tray object
         self._menu = menu
@@ -68,6 +69,17 @@ class TrayManager:
 
         self._tray.activated.connect(self._on_activated)
         controller.state_changed.connect(self._on_state_changed)
+
+    def set_on_quit(self, callback: Callable[[], None]) -> None:
+        """Host-provided quit routine (hide windows, exit the loop). The
+        fallback is plain QApplication.quit()."""
+        self._on_quit = callback
+
+    def _quit(self) -> None:
+        if self._on_quit is not None:
+            self._on_quit()
+        else:
+            QApplication.instance().quit()
 
     def show(self) -> None:
         self._tray.show()

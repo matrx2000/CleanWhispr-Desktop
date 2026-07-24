@@ -1,0 +1,21 @@
+{
+  "id": "run-python",
+  "name": "Run Python",
+  "description": "Execute a short Python snippet and return what it prints (or the value of its last expression). Use for calculations, text/data transformations, and quick checks the model cannot do reliably itself.",
+  "version": "1.0",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string",
+        "description": "Python source code to execute. Print what should be reported back."
+      }
+    },
+    "required": ["code"]
+  },
+  "entry": "tool.py:run",
+  "timeout_s": 15,
+  "confirm": true,
+  "enabled": true,
+  "builtin": true
+}

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cleanwispr"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local voice-to-text and voice-driven text editing for Windows and Linux."
 readme = "README.md"
 license = { text = "MIT" }
@@ -15,7 +15,10 @@ dynamic = ["dependencies"]
 cleanwispr = "cleanwispr.app:main"
 
 [tool.setuptools]
-packages = { find = { include = ["cleanwispr*"] } }
+packages = { find = { include = ["cleanwispr*", "skillkit*", "toolkit*"] } }
+
+[tool.setuptools.package-data]
+toolkit = ["builtin/*/tool.json", "builtin/*/tool.py"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
